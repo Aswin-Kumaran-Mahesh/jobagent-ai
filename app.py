@@ -476,6 +476,152 @@ def parse_csv():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+@app.route("/api/generate_resume_pdf", methods=["POST"])
+def generate_resume_pdf():
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib import colors
+    from reportlab.lib.units import inch
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
+    import io, re
+
+    data = request.json
+    tailored_output = data.get("tailored_output", "")
+    original_resume = data.get("resume", "")
+    job_title = data.get("job_title", "")
+    company = data.get("company", "")
+    candidate_name = data.get("candidate_name", "Candidate")
+
+    # Parse sections from tailored output
+    def extract_section(text, marker):
+        pattern = rf"---\s*{re.escape(marker)}\s*---\s*([\s\S]*?)(?=---\s*[A-Z]|$)"
+        m = re.search(pattern, text, re.IGNORECASE)
+        return m.group(1).strip() if m else ""
+
+    tailored_summary = extract_section(tailored_output, "TAILORED PROFESSIONAL SUMMARY")
+    bullets_raw = extract_section(tailored_output, "2 MODIFIED EXPERIENCE BULLETS")
+    aligned_skills = extract_section(tailored_output, "HIGHLIGHTED ALIGNED SKILLS")
+
+    # Extract bullets
+    bullet_lines = [l.strip().lstrip("*•-").strip() for l in bullets_raw.split("\n") if l.strip().startswith(("*","•","-"))]
+
+    # Build PDF in memory
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=letter,
+                            leftMargin=0.75*inch, rightMargin=0.75*inch,
+                            topMargin=0.75*inch, bottomMargin=0.75*inch)
+
+    DARK = colors.HexColor("#0F172A")
+    BLUE = colors.HexColor("#1E40AF")
+    TEAL = colors.HexColor("#0D9488")
+    MUTED = colors.HexColor("#64748B")
+    WHITE = colors.white
+
+    def S(name, **kw): return ParagraphStyle(name, **kw)
+
+    name_style = S("Name", fontSize=22, fontName="Helvetica-Bold", textColor=DARK, alignment=TA_CENTER, spaceAfter=2)
+    contact_style = S("Contact", fontSize=9, fontName="Helvetica", textColor=MUTED, alignment=TA_CENTER, spaceAfter=4)
+    section_style = S("Section", fontSize=11, fontName="Helvetica-Bold", textColor=BLUE, spaceBefore=12, spaceAfter=4)
+    body_style = S("Body", fontSize=9.5, fontName="Helvetica", textColor=DARK, spaceAfter=4, leading=14)
+    bullet_style = S("Bullet", fontSize=9.5, fontName="Helvetica", textColor=DARK, spaceAfter=3, leading=13, leftIndent=12)
+    tailor_badge = S("Badge", fontSize=8, fontName="Helvetica-Oblique", textColor=TEAL, spaceAfter=6, alignment=TA_CENTER)
+
+    def HR(): return HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#CBD5E1"), spaceAfter=4, spaceBefore=4)
+
+    story = []
+
+    # Extract contact info from original resume (first few lines)
+    orig_lines = [l.strip() for l in original_resume.split("\n") if l.strip()]
+    name_line = orig_lines[0] if orig_lines else candidate_name
+    contact_line = orig_lines[1] if len(orig_lines) > 1 else ""
+
+    # Header
+    story.append(Paragraph(name_line, name_style))
+    if contact_line:
+        story.append(Paragraph(contact_line, contact_style))
+    story.append(Paragraph(f"<i>Tailored for: {job_title} @ {company}</i>", tailor_badge))
+    story.append(HR())
+
+    # Tailored Summary
+    story.append(Paragraph("PROFESSIONAL SUMMARY", section_style))
+    story.append(HR())
+    if tailored_summary:
+        story.append(Paragraph(tailored_summary, body_style))
+    story.append(Spacer(1, 6))
+
+    # Parse and rebuild original resume sections, replacing summary and bullets
+    sections = {}
+    current_section = None
+    current_lines = []
+    skip_keywords = ["SUMMARY","OBJECTIVE","PROFILE"]
+    section_keywords = ["EDUCATION","EXPERIENCE","PROJECTS","SKILLS","PUBLICATIONS","CERTIFICATIONS","AWARDS"]
+
+    for line in orig_lines[2:]:
+        is_section = any(kw in line.upper() for kw in section_keywords)
+        if is_section:
+            if current_section:
+                sections[current_section] = current_lines
+            current_section = line.strip()
+            current_lines = []
+        elif current_section and not any(kw in line.upper() for kw in skip_keywords):
+            current_lines.append(line)
+    if current_section:
+        sections[current_section] = current_lines
+
+    # Education
+    edu_key = next((k for k in sections if "EDUCATION" in k.upper()), None)
+    if edu_key:
+        story.append(Paragraph("EDUCATION", section_style))
+        story.append(HR())
+        for l in sections[edu_key]:
+            if l:
+                story.append(Paragraph(l, body_style))
+        story.append(Spacer(1, 4))
+
+    # Experience — inject improved bullets
+    exp_key = next((k for k in sections if "EXPERIENCE" in k.upper()), None)
+    if exp_key:
+        story.append(Paragraph("EXPERIENCE", section_style))
+        story.append(HR())
+        exp_lines = sections[exp_key]
+        injected = 0
+        for l in exp_lines:
+            if l.startswith(("*","•","-")) and injected < len(bullet_lines):
+                story.append(Paragraph(f"• {bullet_lines[injected]}", bullet_style))
+                injected += 1
+            elif l:
+                story.append(Paragraph(l, body_style))
+        story.append(Spacer(1, 4))
+
+    # Projects
+    proj_key = next((k for k in sections if "PROJECT" in k.upper()), None)
+    if proj_key:
+        story.append(Paragraph("PROJECTS", section_style))
+        story.append(HR())
+        for l in sections[proj_key]:
+            if l.startswith(("*","•","-")):
+                story.append(Paragraph(f"• {l.lstrip('*•- ').strip()}", bullet_style))
+            elif l:
+                story.append(Paragraph(l, body_style))
+        story.append(Spacer(1, 4))
+
+    # Aligned Skills from tailoring
+    if aligned_skills:
+        story.append(Paragraph("KEY SKILLS (TAILORED)", section_style))
+        story.append(HR())
+        story.append(Paragraph(aligned_skills, body_style))
+        story.append(Spacer(1, 4))
+
+    doc.build(story)
+    buf.seek(0)
+
+    from flask import send_file
+    safe_name = f"Resume_Tailored_{job_title.replace(' ','-').replace('/','-')}.pdf"
+    return send_file(buf, mimetype="application/pdf",
+                     as_attachment=True, download_name=safe_name)
+
 @app.route("/")
 def index():
     return render_template("index.html")

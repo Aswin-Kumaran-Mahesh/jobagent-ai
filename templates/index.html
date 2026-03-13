@@ -112,6 +112,11 @@ textarea{min-height:130px}
 .tab-toggle button{flex:1;padding:5px;border:1px solid var(--border);border-radius:6px;background:var(--surface2);color:var(--muted);font-size:10px;cursor:pointer;transition:all .2s}
 .tab-toggle button.active{border-color:var(--accent);color:var(--accent);background:rgba(124,255,212,.08)}
 
+
+.dl-btn{display:inline-flex;align-items:center;gap:7px;background:linear-gradient(135deg,#0D9488,#0F766E);color:#fff;border:none;border-radius:8px;padding:9px 18px;font-size:12px;font-weight:600;cursor:pointer;margin-top:12px;transition:opacity .2s;font-family:"DM Sans",sans-serif}
+.dl-btn:hover{opacity:.85}
+.dl-btn:disabled{opacity:.4;cursor:not-allowed}
+
 .provider-btn{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 6px;cursor:pointer;color:var(--text);text-align:center;transition:all .2s;width:100%}
 .provider-btn:hover{border-color:rgba(124,255,212,.3);background:rgba(124,255,212,.05)}
 .provider-btn.active{border-color:var(--accent);background:rgba(124,255,212,.1);color:var(--accent)}
@@ -665,7 +670,10 @@ function renderRanking(data) {
   document.getElementById("all-ranked").innerHTML = data.ranked_jobs.map((j,i)=>jobCardHtml(j,i+1)).join("");
 }
 
+let lastTailorData = null;
+
 function renderTailor(data) {
+  lastTailorData = data;
   document.getElementById("tailor-ph").style.display="none";
   document.getElementById("tailor-section").classList.add("visible");
   const jdBadge = data.used_custom_jd
@@ -678,7 +686,45 @@ function renderTailor(data) {
         <div class="tailor-sub">${esc(data.company)} &middot; Top-ranked match</div>
       </div>
       <div class="tailor-content">${esc(data.tailored_output)}</div>
+      <button class="dl-btn" onclick="downloadResumePDF()" id="dl-resume-btn">
+        &#11123; Download Full Resume PDF
+      </button>
     </div>`;
+}
+
+async function downloadResumePDF() {
+  const btn = document.getElementById("dl-resume-btn");
+  btn.disabled = true;
+  btn.textContent = "Generating PDF...";
+  try {
+    const resume = uploadedResumeText || document.getElementById("resume-text").value.trim();
+    const profile = buildProfile();
+    const resp = await fetch("/api/generate_resume_pdf", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({
+        tailored_output: lastTailorData.tailored_output,
+        resume: resume,
+        job_title: lastTailorData.job_tailored_for,
+        company: lastTailorData.company,
+        candidate_name: profile.name || "Candidate"
+      })
+    });
+    if (!resp.ok) { alert("PDF generation failed"); return; }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `Resume_Tailored_${lastTailorData.job_tailored_for.replace(/ /g,"-")}.pdf`;
+    a.click();
+    URL.revokeObjectURL(url);
+    btn.textContent = "✓ Downloaded!";
+    setTimeout(() => { btn.disabled = false; btn.innerHTML = "&#11123; Download Full Resume PDF"; }, 2000);
+  } catch(e) {
+    alert("Error: " + e);
+    btn.disabled = false;
+    btn.innerHTML = "&#11123; Download Full Resume PDF";
+  }
 }
 
 async function loadDataset() {
