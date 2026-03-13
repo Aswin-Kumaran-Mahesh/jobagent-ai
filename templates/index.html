@@ -698,7 +698,7 @@ async function downloadResumePDF() {
   btn.textContent = "Generating PDF...";
   try {
     const resume = uploadedResumeText || document.getElementById("resume-text").value.trim();
-    const profile = buildProfile();
+    const candidateName = document.getElementById("cand-name").value.trim() || "Candidate";
     const resp = await fetch("/api/generate_resume_pdf", {
       method: "POST",
       headers: {"Content-Type":"application/json"},
@@ -707,7 +707,7 @@ async function downloadResumePDF() {
         resume: resume,
         job_title: lastTailorData.job_tailored_for,
         company: lastTailorData.company,
-        candidate_name: profile.name || "Candidate"
+        candidate_name: candidateName
       })
     });
     if (!resp.ok) { alert("PDF generation failed"); return; }
