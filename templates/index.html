@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JobAgent AI</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:#08090a;--surface:#111214;--surface2:#18191d;--border:#242629;
+  --accent:#7cffd4;--accent2:#ff6b6b;--accent3:#ffd166;
+  --text:#e8eaed;--muted:#6b7280;--radius:12px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;font-size:14px;line-height:1.6;min-height:100vh}
+header{border-bottom:1px solid var(--border);padding:18px 36px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;background:rgba(8,9,10,0.95);backdrop-filter:blur(12px);z-index:100}
+.logo{font-family:'Syne',sans-serif;font-weight:800;font-size:20px;letter-spacing:-0.5px;display:flex;align-items:center;gap:10px}
+.logo-dot{width:8px;height:8px;background:var(--accent);border-radius:50%;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(1.4)}}
+.badge{font-family:'DM Mono',monospace;font-size:10px;background:rgba(124,255,212,.1);color:var(--accent);border:1px solid rgba(124,255,212,.2);padding:3px 10px;border-radius:100px;letter-spacing:.5px}
+.layout{display:grid;grid-template-columns:370px 1fr;min-height:calc(100vh - 61px)}
+.left-panel{border-right:1px solid var(--border);padding:24px 20px;overflow-y:auto;display:flex;flex-direction:column;gap:18px}
+.panel-title{font-family:'Syne',sans-serif;font-weight:700;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px}
+label{display:block;font-size:10px;font-weight:500;letter-spacing:.5px;color:var(--muted);margin-bottom:5px;text-transform:uppercase}
+input[type=text],input[type=password],textarea{width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'DM Mono',monospace;font-size:12px;padding:9px 11px;outline:none;transition:border-color .2s;resize:vertical}
+input:focus,textarea:focus{border-color:rgba(124,255,212,.4)}
+textarea{min-height:130px}
+.field{margin-bottom:12px}
+.skills-grid{display:flex;flex-wrap:wrap;gap:5px;margin-top:5px}
+.skill-tag{background:rgba(124,255,212,.08);border:1px solid rgba(124,255,212,.15);color:var(--accent);font-family:'DM Mono',monospace;font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer;transition:all .15s;user-select:none}
+.skill-tag:hover{background:rgba(124,255,212,.15)}
+.skill-tag.active{background:var(--accent);color:var(--bg);border-color:var(--accent)}
+.run-btn{width:100%;background:var(--accent);color:var(--bg);border:none;border-radius:var(--radius);padding:13px;font-family:'Syne',sans-serif;font-weight:700;font-size:14px;cursor:pointer;transition:all .2s;display:flex;align-items:center;justify-content:center;gap:8px}
+.run-btn:hover{background:#a0ffe3;transform:translateY(-1px)}
+.run-btn:disabled{background:var(--surface2);color:var(--muted);cursor:not-allowed;transform:none}
+.right-panel{padding:24px 28px;overflow-y:auto;display:flex;flex-direction:column;gap:20px}
+.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;gap:14px;text-align:center;padding:60px 0}
+.empty-icon{font-size:48px;opacity:.3}
+.empty-state h2{font-family:'Syne',sans-serif;font-size:22px;font-weight:700;color:var(--muted)}
+.empty-state p{color:var(--muted);font-size:13px;max-width:300px}
+.pipeline{display:flex;align-items:center;gap:0;flex-wrap:wrap;gap:4px}
+.pipe-step{display:flex;align-items:center;gap:7px;padding:7px 13px;border-radius:8px;font-family:'DM Mono',monospace;font-size:11px;color:var(--muted);border:1px solid var(--border);background:var(--surface);transition:all .3s;white-space:nowrap}
+.pipe-step.active{color:var(--accent);border-color:rgba(124,255,212,.3);background:rgba(124,255,212,.06)}
+.pipe-step.done{color:var(--accent);border-color:rgba(124,255,212,.4);background:rgba(124,255,212,.1)}
+.pipe-arrow{color:var(--border);font-size:14px;padding:0 2px}
+.pipe-dot{width:6px;height:6px;border-radius:50%;background:var(--muted);transition:background .3s;flex-shrink:0}
+.pipe-step.active .pipe-dot{background:var(--accent);animation:pulse 1s infinite}
+.pipe-step.done .pipe-dot{background:var(--accent)}
+.log-stream{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;font-family:'DM Mono',monospace;font-size:11px;color:var(--muted);max-height:160px;overflow-y:auto;line-height:1.9}
+.log-line.tool{color:var(--accent3)}.log-line.ok{color:var(--accent)}.log-line.err{color:var(--accent2)}
+.spinner{width:14px;height:14px;border:2px solid transparent;border-top-color:currentColor;border-radius:50%;animation:spin .7s linear infinite;display:inline-block}
+@keyframes spin{to{transform:rotate(360deg)}}
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--border);margin-bottom:18px}
+.tab{padding:9px 14px;font-family:'DM Mono',monospace;font-size:11px;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;transition:all .15s}
+.tab:hover{color:var(--text)}
+.tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+.tab-content{display:none}
+.tab-content.active{display:block;animation:fadeIn .3s ease}
+@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+.stats-row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;text-align:center}
+.stat-num{font-family:'Syne',sans-serif;font-size:26px;font-weight:800;line-height:1;margin-bottom:3px}
+.stat-label{font-size:10px;color:var(--muted)}
+.job-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;margin-bottom:8px;position:relative;overflow:hidden;transition:border-color .2s}
+.job-card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--border)}
+.job-card.r1::before{background:var(--accent)}
+.job-card.r2::before{background:var(--accent3)}
+.job-card.r3::before{background:#a78bfa}
+.job-card:hover{border-color:rgba(124,255,212,.2)}
+.job-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px;gap:10px}
+.job-title{font-family:'Syne',sans-serif;font-weight:700;font-size:13px;line-height:1.3}
+.job-company{font-size:11px;color:var(--muted);margin-top:2px}
+.score-badge{font-family:'DM Mono',monospace;font-size:20px;font-weight:500;color:var(--accent);white-space:nowrap;flex-shrink:0}
+.score-badge span{font-size:10px;color:var(--muted)}
+.score-bar-wrap{background:var(--surface2);border-radius:4px;height:3px;margin-bottom:8px;overflow:hidden}
+.score-bar{height:100%;border-radius:4px;background:linear-gradient(90deg,var(--accent),#a0ffe3);transition:width 1s ease}
+.job-meta{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:6px}
+.meta-chip{font-family:'DM Mono',monospace;font-size:10px;padding:2px 7px;border-radius:4px;border:1px solid var(--border);color:var(--muted)}
+.meta-chip.loc{color:#93c5fd;border-color:rgba(147,197,253,.2);background:rgba(147,197,253,.06)}
+.meta-chip.exp{color:var(--accent3);border-color:rgba(255,209,102,.2);background:rgba(255,209,102,.06)}
+.meta-chip.match{color:var(--accent);border-color:rgba(124,255,212,.2);background:rgba(124,255,212,.06)}
+.score-breakdown{display:flex;gap:8px;font-family:'DM Mono',monospace;font-size:10px;color:var(--muted)}
+.rank-medal{width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:'Syne',sans-serif;font-weight:800;font-size:10px;flex-shrink:0}
+.rm-1{background:rgba(124,255,212,.15);color:var(--accent)}
+.rm-2{background:rgba(255,209,102,.15);color:var(--accent3)}
+.rm-3{background:rgba(167,139,250,.15);color:#a78bfa}
+.rm-n{background:var(--surface2);color:var(--muted)}
+.rejection-item{display:flex;align-items:flex-start;gap:8px;padding:7px 10px;border-radius:8px;background:rgba(255,107,107,.05);border:1px solid rgba(255,107,107,.1);margin-bottom:5px;font-size:12px}
+.rej-x{color:var(--accent2);flex-shrink:0;margin-top:1px}
+.tailor-block{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+.tailor-header{padding:12px 16px;background:rgba(124,255,212,.06);border-bottom:1px solid var(--border)}
+.tailor-title{font-family:'Syne',sans-serif;font-weight:700;font-size:13px}
+.tailor-sub{font-size:11px;color:var(--muted)}
+.tailor-content{padding:16px;font-family:'DM Mono',monospace;font-size:12px;line-height:1.9;color:#c8d5d0;white-space:pre-wrap}
+#dataset-section table{width:100%;border-collapse:collapse;font-size:12px;font-family:'DM Mono',monospace}
+#dataset-section th{text-align:left;padding:8px 10px;font-size:10px;letter-spacing:.5px;color:var(--muted);border-bottom:1px solid var(--border);text-transform:uppercase;background:var(--surface)}
+#dataset-section td{padding:7px 10px;border-bottom:1px solid rgba(36,38,41,.5);vertical-align:top}
+#dataset-section tr:hover td{background:var(--surface2)}
+.section-wrap{display:none}
+.section-wrap.visible{display:block;animation:fadeIn .4s ease}
+
+.provider-btn{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 6px;cursor:pointer;color:var(--text);text-align:center;transition:all .2s;width:100%}
+.provider-btn:hover{border-color:rgba(124,255,212,.3);background:rgba(124,255,212,.05)}
+.provider-btn.active{border-color:var(--accent);background:rgba(124,255,212,.1);color:var(--accent)}
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo"><div class="logo-dot"></div>JobAgent AI</div>
+  <div style="display:flex;gap:8px">
+    <span class="badge">AGENTIC PIPELINE</span>
+    <span class="badge" style="background:rgba(255,107,107,.1);color:var(--accent2);border-color:rgba(255,107,107,.2)">LLM-POWERED</span>
+  </div>
+</header>
+
+<div class="layout">
+
+  <!-- LEFT PANEL -->
+  <div class="left-panel">
+    <div>
+      <div class="panel-title">LLM Provider</div>
+      <div class="card">
+        <div class="field">
+          <label>Select Provider</label>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:10px">
+            <button class="provider-btn active" onclick="setProvider('groq')" id="pb-groq">
+              <div style="font-weight:700;font-size:12px">Groq</div>
+              <div style="font-size:9px;color:var(--accent);margin-top:2px">FREE</div>
+            </button>
+            <button class="provider-btn" onclick="setProvider('gemini')" id="pb-gemini">
+              <div style="font-weight:700;font-size:12px">Gemini</div>
+              <div style="font-size:9px;color:var(--accent);margin-top:2px">FREE</div>
+            </button>
+            <button class="provider-btn" onclick="setProvider('anthropic')" id="pb-anthropic">
+              <div style="font-weight:700;font-size:12px">Claude</div>
+              <div style="font-size:9px;color:var(--accent3);margin-top:2px">PAID</div>
+            </button>
+          </div>
+        </div>
+        <div class="field">
+          <label id="api-key-label">Groq API Key</label>
+          <input type="password" id="api-key" placeholder="gsk_...">
+        </div>
+        <div id="provider-info" style="font-size:10px;color:var(--muted);line-height:1.6;margin-top:4px">
+          Get free key at console.groq.com/keys &middot; No credit card needed
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel-title">Candidate Profile</div>
+      <div class="card">
+        <div class="field"><label>Full Name</label><input type="text" id="cand-name" value="Aswin Kumaran Mahesh Kannan"></div>
+        <div class="field"><label>Years of Experience</label><input type="text" id="cand-exp" value="1"></div>
+        <div class="field"><label>Max Experience Required (filter cap)</label><input type="text" id="cand-maxexp" value="3"></div>
+        <div class="field"><label>Location Preferences (comma-separated)</label><input type="text" id="cand-loc" value="Remote, Houston TX, New York NY, San Francisco CA, Any"></div>
+        <div class="field"><label>Exclude Companies (optional)</label><input type="text" id="cand-excl" placeholder="e.g. Palantir, Two Sigma"></div>
+        <div class="field">
+          <label>Skills (click to toggle)</label>
+          <div class="skills-grid" id="skills-grid"></div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel-title">Resume Text</div>
+      <div class="card">
+        <textarea id="resume-text"></textarea>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel-title" style="display:flex;align-items:center;justify-content:space-between">
+        <span>Job Description <span style="color:var(--accent);font-size:9px;letter-spacing:1px"> OPTIONAL</span></span>
+        <span id="jd-badge" style="display:none;font-size:9px;background:rgba(124,255,212,.15);color:var(--accent);border:1px solid rgba(124,255,212,.3);padding:2px 8px;border-radius:100px;letter-spacing:.5px">JD BOOST ON</span>
+      </div>
+      <div class="card">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Paste a specific job description to boost ranking and sharpen resume tailoring for that role.</div>
+        <textarea id="jd-text" style="min-height:100px;font-size:11px" placeholder="Paste the full JD here (optional)...&#10;&#10;e.g. We are looking for an AI Engineer to build agentic workflows..."></textarea>
+      </div>
+    </div>
+
+    <button class="run-btn" id="run-btn" onclick="runAgent()">
+      <span id="run-icon">&#9654;</span>
+      <span id="run-label">Run Agent Pipeline</span>
+    </button>
+  </div>
+
+  <!-- RIGHT PANEL -->
+  <div class="right-panel" id="right-panel">
+    <div class="empty-state" id="empty-state">
+      <div class="empty-icon">&#129302;</div>
+      <h2>Ready to search</h2>
+      <p>Enter your API key, confirm your profile, and hit Run to start the agentic pipeline.</p>
+    </div>
+
+    <div id="results" style="display:none">
+      <div class="pipeline" id="pipeline-bar" style="margin-bottom:14px">
+        <div class="pipe-step" id="ps-filter"><div class="pipe-dot"></div>Filter</div>
+        <div class="pipe-arrow">&#8594;</div>
+        <div class="pipe-step" id="ps-rank"><div class="pipe-dot"></div>Rank</div>
+        <div class="pipe-arrow">&#8594;</div>
+        <div class="pipe-step" id="ps-tailor"><div class="pipe-dot"></div>Tailor</div>
+        <div class="pipe-arrow">&#8594;</div>
+        <div class="pipe-step" id="ps-done"><div class="pipe-dot"></div>Done</div>
+      </div>
+
+      <div class="log-stream" id="log-stream">
+        <span class="log-line">Initializing...</span>
+      </div>
+
+      <div class="tabs" style="margin-top:18px">
+        <div class="tab active" onclick="switchTab('filter')">Filtering</div>
+        <div class="tab" onclick="switchTab('ranking')">Ranking</div>
+        <div class="tab" onclick="switchTab('tailor')">Resume Tailoring</div>
+        <div class="tab" onclick="switchTab('dataset')">Dataset</div>
+      </div>
+
+      <div class="tab-content active" id="tab-filter">
+        <div class="section-wrap" id="filter-section">
+          <div class="stats-row" id="filter-stats"></div>
+          <div id="filter-passed"></div>
+          <div id="filter-rejected"></div>
+        </div>
+        <div id="filter-ph" style="color:var(--muted);font-size:13px;padding:16px 0">Waiting for filtering results...</div>
+      </div>
+
+      <div class="tab-content" id="tab-ranking">
+        <div class="section-wrap" id="ranking-section">
+          <div class="panel-title" style="margin-bottom:10px">TOP 3 MATCHES</div>
+          <div id="top3-cards"></div>
+          <div class="panel-title" style="margin:16px 0 10px">ALL RANKED JOBS</div>
+          <div id="all-ranked"></div>
+        </div>
+        <div id="ranking-ph" style="color:var(--muted);font-size:13px;padding:16px 0">Waiting for ranking results...</div>
+      </div>
+
+      <div class="tab-content" id="tab-tailor">
+        <div class="section-wrap" id="tailor-section">
+          <div id="tailor-output"></div>
+        </div>
+        <div id="tailor-ph" style="color:var(--muted);font-size:13px;padding:16px 0">Waiting for resume tailoring...</div>
+      </div>
+
+      <div class="tab-content" id="tab-dataset">
+        <div id="dataset-section">
+          <div style="color:var(--muted);font-size:13px;padding:16px 0">Loading dataset...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const ALL_SKILLS = [
+  "Python","LangGraph","LangChain","LlamaIndex","RAG","LLMs","prompt engineering",
+  "agentic workflows","tool integration","ChromaDB","FAISS","Neo4j","vector search",
+  "hybrid retrieval","PyTorch","scikit-learn","deep learning","transformers",
+  "MLOps","CI/CD","Docker","REST APIs","Git","AWS","GCP","RLHF","instruction tuning",
+  "context engineering","MCP","federated learning","SHAP","feature engineering"
+];
+let activeSkills = new Set(ALL_SKILLS);
+
+const DEFAULT_RESUME = `ASWIN KUMARAN MAHESH KANNAN
+maswinkumaran@gmail.com | linkedin.com/in/aswin-kumaran-mahesh
+
+SUMMARY
+MS Data Science candidate (GPA 3.85, UH, May 2026) with hands-on experience building
+GenAI applications, agentic workflows, and RAG pipelines. Skilled in LangGraph, LangChain,
+ChromaDB, PyTorch, and MLOps. Published federated learning research (Springer, 2026).
+
+EDUCATION
+Master of Engineering in Data Science - University of Houston (GPA: 3.85) | 2024-2026
+B.Tech in AI and Data Science - M. Kumarasamy College of Engineering | 2020-2024
+
+EXPERIENCE
+Data Science Intern - Sterling Software | Feb 2024 - Jun 2024
+* Improved predictive model accuracy by 20% using Python and scikit-learn.
+* Built and evaluated deep learning pipelines for classification tasks.
+* Collaborated with cross-functional teams to integrate ML solutions into production.
+
+Software Engineer Intern - Mistral Solutions | Jul 2022 - Aug 2022
+* Developed Python-based AI tools for autonomous vision and data processing.
+* Built and consumed REST APIs to integrate AI capabilities into software pipelines.
+
+PROJECTS
+RareDx: Agentic GenAI System | LangGraph, MCP, ChromaDB
+* Built GenAI copilot using LangGraph with agentic workflows and tool integration.
+* Implemented context engineering, memory/state management, hybrid retrieval.
+
+ClimateRAG: RAG Pipeline | LangChain, FAISS, LLMs
+* Designed RAG pipeline with hybrid retrieval, vector search, and reranking.
+
+Fed-AI: Federated Learning | Springer Book Chapter, 2026
+* Federated ML framework: MSE=0.039, R2=0.89. Integrated SHAP and Grad-CAM.`;
+
+document.getElementById("resume-text").value = DEFAULT_RESUME;
+
+
+const PROVIDER_CONFIG = {
+  groq: {
+    placeholder: "gsk_...",
+    label: "Groq API Key",
+    hint: "Free tier: console.groq.com — fast Llama 3 70B",
+    info: "Get free key at console.groq.com/keys · No credit card needed · Very fast inference"
+  },
+  gemini: {
+    placeholder: "AIza...",
+    label: "Gemini API Key",
+    hint: "Free tier: aistudio.google.com — Gemini 1.5 Flash",
+    info: "Get free key at aistudio.google.com/apikey · Generous free quota · No billing required"
+  },
+  anthropic: {
+    placeholder: "sk-ant-api03-...",
+    label: "Anthropic API Key",
+    hint: "Paid: console.anthropic.com — best tool-calling",
+    info: "Get key at console.anthropic.com · ~$0.01-0.05 per run · Best reasoning quality"
+  }
+};
+let currentProvider = "groq";
+
+function setProvider(p) {
+  currentProvider = p;
+  ["groq","gemini","anthropic"].forEach(n => {
+    const el = document.getElementById("pb-"+n);
+    if (el) el.classList.toggle("active", n===p);
+  });
+  const cfg = PROVIDER_CONFIG[p];
+  const keyEl = document.getElementById("api-key");
+  const labelEl = document.getElementById("api-key-label");
+  const hintEl = document.getElementById("provider-hint");
+  const infoEl = document.getElementById("provider-info");
+  if (keyEl) { keyEl.placeholder = cfg.placeholder; keyEl.value = ""; }
+  if (labelEl) labelEl.textContent = cfg.label;
+  if (hintEl) hintEl.textContent = cfg.hint;
+  if (infoEl) infoEl.textContent = cfg.info;
+}
+setProvider("groq");
+
+function initSkills() {
+  const grid = document.getElementById("skills-grid");
+  ALL_SKILLS.forEach(skill => {
+    const tag = document.createElement("div");
+    tag.className = "skill-tag active";
+    tag.textContent = skill;
+    tag.onclick = () => {
+      if (activeSkills.has(skill)) { activeSkills.delete(skill); tag.classList.remove("active"); }
+      else { activeSkills.add(skill); tag.classList.add("active"); }
+    };
+    grid.appendChild(tag);
+  });
+}
+initSkills();
+loadDataset();
+
+function switchTab(name) {
+  const names = ["filter","ranking","tailor","dataset"];
+  document.querySelectorAll(".tab").forEach((t,i) => t.classList.toggle("active", names[i]===name));
+  document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
+  document.getElementById("tab-"+name).classList.add("active");
+}
+
+function log(msg, cls="info") {
+  const s = document.getElementById("log-stream");
+  const br = document.createElement("br");
+  const line = document.createElement("span");
+  line.className = "log-line " + cls;
+  line.textContent = msg;
+  s.appendChild(br); s.appendChild(line);
+  s.scrollTop = s.scrollHeight;
+}
+
+function setPipe(step, state) {
+  const el = document.getElementById("ps-"+step);
+  if (el) { el.classList.remove("active","done"); if(state) el.classList.add(state); }
+}
+
+async function runAgent() {
+  const apiKey = document.getElementById("api-key").value.trim();
+  if (!apiKey) { alert("Please enter your Anthropic API key."); return; }
+
+  document.getElementById("empty-state").style.display = "none";
+  document.getElementById("results").style.display = "block";
+  document.getElementById("log-stream").innerHTML = '<span class="log-line">Starting pipeline...</span>';
+  ["filter","rank","tailor","done"].forEach(s => setPipe(s,""));
+  ["filter-section","ranking-section","tailor-section"].forEach(id => {
+    document.getElementById(id).classList.remove("visible");
+  });
+  ["filter-ph","ranking-ph","tailor-ph"].forEach(id => {
+    document.getElementById(id).style.display = "block";
+  });
+
+  const btn = document.getElementById("run-btn");
+  btn.disabled = true;
+  document.getElementById("run-icon").innerHTML = '<span class="spinner"></span>';
+  document.getElementById("run-label").textContent = "Running...";
+
+  const jdText = document.getElementById("jd-text").value.trim();
+  const provider = currentProvider;
+  // Show/hide JD badge
+  document.getElementById("jd-badge").style.display = jdText ? "inline" : "none";
+
+  const profile = {
+    name: document.getElementById("cand-name").value.trim(),
+    years_experience: parseInt(document.getElementById("cand-exp").value)||1,
+    max_experience_required: parseInt(document.getElementById("cand-maxexp").value)||3,
+    location_preference: document.getElementById("cand-loc").value.split(",").map(s=>s.trim()).filter(Boolean),
+    excluded_companies: document.getElementById("cand-excl").value.split(",").map(s=>s.trim()).filter(Boolean),
+    skills: [...activeSkills],
+    degree: "Master of Engineering in Data Science",
+    university: "University of Houston", gpa: 3.85, graduation: "May 2026",
+    job_type: ["internship","full-time"]
+  };
+  const resume = document.getElementById("resume-text").value;
+
+  try {
+    const resp = await fetch("/api/run", {
+      method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({api_key: apiKey, provider, profile, resume, jd_text: jdText})
+    });
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {stream:true});
+      const lines = buf.split("\n"); buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        try { handleEvent(JSON.parse(line.slice(6))); } catch(e) {}
+      }
+    }
+  } catch(e) { log("Error: "+e.message, "err"); }
+
+  btn.disabled = false;
+  document.getElementById("run-icon").textContent = "\u25B6";
+  document.getElementById("run-label").textContent = "Run Agent Pipeline";
+}
+
+function handleEvent(event) {
+  const {type, data} = event;
+  if (type==="status") log("+ "+data.message, "ok");
+  else if (type==="step") log("-- Step "+data.step+": "+data.message);
+  else if (type==="tool_call") {
+    log("* Calling: ["+data.tool+"]", "tool");
+    const map={filter_jobs:"filter",rank_jobs:"rank",tailor_resume:"tailor"};
+    if (map[data.tool]) setPipe(map[data.tool],"active");
+  }
+  else if (type==="reasoning") log("~ Agent reasoning...");
+  else if (type==="filter_result") {
+    renderFilter(data); setPipe("filter","done");
+    log("+ Filtering done: "+data.passed_count+" passed", "ok");
+    switchTab("filter");
+  }
+  else if (type==="rank_result") {
+    renderRanking(data); setPipe("rank","done");
+    log("+ Ranking done: top="+data.top_3[0]["Job Title"], "ok");
+    switchTab("ranking");
+  }
+  else if (type==="tailor_result") {
+    renderTailor(data); setPipe("tailor","done");
+    log("+ Resume tailored for: "+data.job_tailored_for, "ok");
+    switchTab("tailor");
+  }
+  else if (type==="final") { setPipe("done","done"); log(">> Pipeline complete!", "ok"); }
+  else if (type==="error") log("! Error: "+data.message, "err");
+}
+
+function renderFilter(data) {
+  document.getElementById("filter-ph").style.display="none";
+  document.getElementById("filter-section").classList.add("visible");
+  document.getElementById("filter-stats").innerHTML = `
+    <div class="stat-card"><div class="stat-num" style="color:var(--accent)">${data.passed_count}</div><div class="stat-label">Passed</div></div>
+    <div class="stat-card"><div class="stat-num" style="color:var(--accent2)">${data.rejected_count}</div><div class="stat-label">Rejected</div></div>
+    <div class="stat-card"><div class="stat-num" style="color:var(--accent3)">${data.passed_count+data.rejected_count}</div><div class="stat-label">Total</div></div>`;
+  let ph = `<div class="panel-title" style="margin-bottom:8px">PASSED (${data.passed_count})</div>`;
+  data.filtered_jobs.forEach(j => {
+    ph += `<div class="job-card" style="margin-bottom:6px"><div style="display:flex;align-items:center;gap:10px">
+      <span style="color:var(--accent)">&#10003;</span>
+      <div><div style="font-weight:600;font-size:13px">${j["Job Title"]}</div>
+      <div style="font-size:11px;color:var(--muted)">${j.Company} &middot; ${j.Location}</div></div></div></div>`;
+  });
+  document.getElementById("filter-passed").innerHTML = ph;
+  if (data.rejected_count > 0) {
+    let rh = `<div class="panel-title" style="margin:14px 0 8px">REJECTED (${data.rejected_count})</div>`;
+    data.rejection_log.forEach(r => {
+      rh += `<div class="rejection-item"><span class="rej-x">&#10007;</span>
+        <div><div style="font-weight:500">${r.title} @ ${r.company}</div>
+        <div style="color:var(--muted);font-size:11px">${r.reasons.join(" &middot; ")}</div></div></div>`;
+    });
+    document.getElementById("filter-rejected").innerHTML = rh;
+  }
+}
+
+function jobCardHtml(j, rank) {
+  const cls = rank<=3 ? ["r1","r2","r3"][rank-1] : "rn";
+  const medalCls = rank<=3 ? ["rm-1","rm-2","rm-3"][rank-1] : "rm-n";
+  const skills = (j.matched_skills||[]).slice(0,4).join(", ");
+  return `<div class="job-card ${cls}">
+    <div class="job-header">
+      <div style="display:flex;align-items:flex-start;gap:8px;flex:1">
+        <div class="rank-medal ${medalCls}">${rank}</div>
+        <div><div class="job-title">${j["Job Title"]}</div><div class="job-company">${j.Company}</div></div>
+      </div>
+      <div class="score-badge">${j.score}<span>/100</span></div>
+    </div>
+    <div class="score-bar-wrap"><div class="score-bar" style="width:${j.score}%"></div></div>
+    <div class="job-meta">
+      <span class="meta-chip loc">&#128205; ${j.Location}</span>
+      <span class="meta-chip exp">&#9201; ${j["Years Experience"]} yrs</span>
+      <span class="meta-chip match">&#127919; ${j.skill_match_pct}% match</span>
+    </div>
+    <div class="score-breakdown">
+      <span>skill:${j.skill_score}</span><span>&middot;</span>
+      <span>exp:${j.exp_score}</span><span>&middot;</span>
+      <span>loc:${j.loc_score}</span>
+      ${j.jd_boost_active && j.jd_score > 0 ? `<span>&middot;</span><span style="color:var(--accent);opacity:.9">jd:+${j.jd_score}</span>` : ""}
+      ${skills?`<span>&middot;</span><span style="color:var(--accent);opacity:.7">${skills}</span>`:""}
+    </div>
+    <div style="margin-top:7px"><a href="${j.URL}" target="_blank" style="font-family:'DM Mono',monospace;font-size:10px;color:var(--accent);text-decoration:none;opacity:.7">&#8599; View Job</a></div>
+  </div>`;
+}
+
+function renderRanking(data) {
+  document.getElementById("ranking-ph").style.display="none";
+  document.getElementById("ranking-section").classList.add("visible");
+  document.getElementById("top3-cards").innerHTML = data.top_3.map((j,i)=>jobCardHtml(j,i+1)).join("");
+  document.getElementById("all-ranked").innerHTML = data.ranked_jobs.map((j,i)=>jobCardHtml(j,i+1)).join("");
+}
+
+function renderTailor(data) {
+  document.getElementById("tailor-ph").style.display="none";
+  document.getElementById("tailor-section").classList.add("visible");
+  const jdBadge = data.used_custom_jd
+    ? `<span style="font-size:9px;background:rgba(124,255,212,.15);color:var(--accent);border:1px solid rgba(124,255,212,.3);padding:2px 8px;border-radius:100px;margin-left:8px;letter-spacing:.5px">CUSTOM JD USED</span>`
+    : `<span style="font-size:9px;background:var(--surface2);color:var(--muted);border:1px solid var(--border);padding:2px 8px;border-radius:100px;margin-left:8px">DATASET DESC</span>`;
+  document.getElementById("tailor-output").innerHTML = `
+    <div class="tailor-block">
+      <div class="tailor-header">
+        <div class="tailor-title">&#10024; Tailored for: ${esc(data.job_tailored_for)} ${jdBadge}</div>
+        <div class="tailor-sub">${esc(data.company)} &middot; Top-ranked match</div>
+      </div>
+      <div class="tailor-content">${esc(data.tailored_output)}</div>
+    </div>`;
+}
+
+async function loadDataset() {
+  try {
+    const jobs = await (await fetch("/api/jobs")).json();
+    let html = `<div style="overflow-x:auto"><table><thead><tr>
+      <th>#</th><th>Job Title</th><th>Company</th><th>Location</th><th>Exp</th><th>Key Skills</th>
+    </tr></thead><tbody>`;
+    jobs.forEach((j,i) => {
+      const s = (j["Required Skills"]||"").split(",").slice(0,3).join(", ");
+      html += `<tr><td style="color:var(--muted)">${i+1}</td>
+        <td style="font-weight:500">${j["Job Title"]}</td>
+        <td style="color:var(--muted)">${j.Company}</td>
+        <td><span class="meta-chip loc">${j.Location}</span></td>
+        <td style="text-align:center;color:var(--accent3)">${j["Years Experience"]}</td>
+        <td style="color:var(--muted);font-size:11px">${s}...</td></tr>`;
+    });
+    html += `</tbody></table></div>`;
+    document.getElementById("dataset-section").innerHTML = html;
+  } catch(e) {}
+}
+
+function esc(t) {
+  return (t||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+</script>
+</body>
+</html>
