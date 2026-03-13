@@ -17,6 +17,7 @@ PROVIDER_MODELS = {
     "anthropic": "claude-opus-4-5",
     "groq":      "llama3-70b-8192",
     "gemini":    "gemini-2.0-flash",
+    "openai":    "gpt-4o-mini",
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -178,6 +179,13 @@ def tailor_with_anthropic(prompt, api_key):
                                 messages=[{"role":"user","content":prompt}])
     return r.content[0].text
 
+def tailor_with_openai(prompt, api_key):
+    from openai import OpenAI
+    client = OpenAI(api_key=api_key)
+    r = client.chat.completions.create(model=PROVIDER_MODELS["openai"], max_tokens=900,
+        messages=[{"role":"user","content":prompt}])
+    return r.choices[0].message.content
+
 def tailor_with_groq(prompt, api_key):
     from groq import Groq
     client = Groq(api_key=api_key)
@@ -192,7 +200,7 @@ def tailor_with_gemini(prompt, api_key):
     r = model.generate_content(prompt)
     return r.text
 
-TAILOR_FNS = {"anthropic": tailor_with_anthropic,
+TAILOR_FNS = {"anthropic": tailor_with_anthropic, "openai": tailor_with_openai,
                "groq": tailor_with_groq, "gemini": tailor_with_gemini}
 
 def tailor_resume_llm(job, resume, candidate_skills, api_key, provider, jd_text=""):
@@ -297,6 +305,12 @@ def run_anthropic_agent(profile, resume, api_key, emit, all_jobs, jd_text):
 
 def call_llm_simple(provider, api_key, prompt):
     """Single-turn LLM call, returns text. Used for non-Anthropic providers."""
+    if provider == "openai":
+        from openai import OpenAI
+        r = OpenAI(api_key=api_key).chat.completions.create(
+            model=PROVIDER_MODELS["openai"], max_tokens=1200,
+            messages=[{"role":"user","content":prompt}])
+        return r.choices[0].message.content
     if provider == "groq":
         from groq import Groq
         r = Groq(api_key=api_key).chat.completions.create(

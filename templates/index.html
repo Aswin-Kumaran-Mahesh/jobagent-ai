@@ -127,7 +127,7 @@ textarea{min-height:130px}
       <div class="card">
         <div class="field">
           <label>Select Provider</label>
-          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:10px">
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:10px">
             <button class="provider-btn active" onclick="setProvider('groq')" id="pb-groq">
               <div style="font-weight:700;font-size:12px">Groq</div>
               <div style="font-size:9px;color:var(--accent);margin-top:2px">FREE</div>
@@ -139,6 +139,10 @@ textarea{min-height:130px}
             <button class="provider-btn" onclick="setProvider('anthropic')" id="pb-anthropic">
               <div style="font-weight:700;font-size:12px">Claude</div>
               <div style="font-size:9px;color:var(--accent3);margin-top:2px">PAID</div>
+            </button>
+            <button class="provider-btn" onclick="setProvider('openai')" id="pb-openai">
+              <div style="font-weight:700;font-size:12px">ChatGPT</div>
+              <div style="font-size:9px;color:var(--accent3);margin-top:2px">CHEAP</div>
             </button>
           </div>
         </div>
@@ -315,6 +319,12 @@ const PROVIDER_CONFIG = {
     hint: "Free tier: aistudio.google.com — Gemini 1.5 Flash",
     info: "Get free key at aistudio.google.com/apikey · Generous free quota · No billing required"
   },
+  openai: {
+    placeholder: "sk-...",
+    label: "OpenAI API Key",
+    hint: "Cheap: platform.openai.com — GPT-4o Mini",
+    info: "Get key at platform.openai.com/api-keys · GPT-4o Mini ~$0.001/run · Very affordable"
+  },
   anthropic: {
     placeholder: "sk-ant-api03-...",
     label: "Anthropic API Key",
@@ -326,7 +336,7 @@ let currentProvider = "groq";
 
 function setProvider(p) {
   currentProvider = p;
-  ["groq","gemini","anthropic"].forEach(n => {
+  ["groq","gemini","anthropic","openai"].forEach(n => {
     const el = document.getElementById("pb-"+n);
     if (el) el.classList.toggle("active", n===p);
   });
