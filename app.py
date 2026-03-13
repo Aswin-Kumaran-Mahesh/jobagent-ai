@@ -6,7 +6,7 @@ Multi-provider LLM support:
   - Google Gemini       — FREE tier (gemini-1.5-flash)
 """
 
-import os, json, csv, queue, threading, re
+import os, json, csv, queue, threading, re, io, base64
 from flask import Flask, render_template, request, jsonify, Response, stream_with_context
 
 app = Flask(__name__)
@@ -400,12 +400,13 @@ def run_simple_agent(profile, resume, api_key, provider, emit, all_jobs, jd_text
 # MAIN AGENT DISPATCHER
 # ─────────────────────────────────────────────────────────────────────────────
 
-def run_agent_streaming(profile, resume, api_key, provider, event_queue, jd_text=""):
+def run_agent_streaming(profile, resume, api_key, provider, event_queue, jd_text="", custom_jobs=None):
     def emit(event_type, data):
         event_queue.put({"type": event_type, "data": data})
     try:
-        all_jobs = load_jobs()
-        emit("status", {"message": f"Loaded {len(all_jobs)} jobs | Provider: {provider.upper()}", "step":0})
+        all_jobs = custom_jobs if custom_jobs else load_jobs()
+        source = "uploaded CSV" if custom_jobs else "built-in dataset"
+        emit("status", {"message": f"Loaded {len(all_jobs)} jobs from {source} | Provider: {provider.upper()}", "step":0})
         if jd_text:
             emit("status", {"message":"Custom JD detected — boosting ranking + tailoring", "step":0})
 
@@ -421,6 +422,59 @@ def run_agent_streaming(profile, resume, api_key, provider, event_queue, jd_text
 # ─────────────────────────────────────────────────────────────────────────────
 # ROUTES
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+# ── Upload helpers ────────────────────────────────────────────────────────────
+
+@app.route("/api/extract_pdf", methods=["POST"])
+def extract_pdf():
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+    f = request.files["file"]
+    if not f.filename.lower().endswith(".pdf"):
+        return jsonify({"error": "File must be a PDF"}), 400
+    try:
+        import pdfplumber
+        text = ""
+        with pdfplumber.open(io.BytesIO(f.read())) as pdf:
+            for page in pdf.pages:
+                t = page.extract_text()
+                if t:
+                    text += t + "\n"
+        text = text.strip()
+        if not text:
+            return jsonify({"error": "Could not extract text from PDF"}), 400
+        word_count = len(text.split())
+        return jsonify({"text": text, "word_count": word_count})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/parse_csv", methods=["POST"])
+def parse_csv():
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+    f = request.files["file"]
+    if not f.filename.lower().endswith(".csv"):
+        return jsonify({"error": "File must be a CSV"}), 400
+    try:
+        content_bytes = f.read().decode("utf-8", errors="replace")
+        reader = csv.DictReader(io.StringIO(content_bytes))
+        rows = list(reader)
+        required = ["Job Title", "Company", "Location", "Required Skills",
+                    "Years Experience", "Job Description", "URL"]
+        missing = [r for r in required if r not in reader.fieldnames]
+        if missing:
+            return jsonify({"error": f"Missing columns: {missing}"}), 400
+        for i, row in enumerate(rows):
+            row["id"] = i + 1
+            try:
+                row["Years Experience"] = int(row.get("Years Experience", 0))
+            except:
+                row["Years Experience"] = 0
+        return jsonify({"jobs": rows, "count": len(rows)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/")
 def index():
@@ -440,9 +494,10 @@ def run():
     if provider not in PROVIDER_MODELS:
         return jsonify({"error":f"Unknown provider: {provider}"}), 400
 
-    profile  = data.get("profile", DEFAULT_PROFILE)
-    resume   = data.get("resume",  DEFAULT_RESUME)
-    jd_text  = data.get("jd_text","").strip()
+    profile     = data.get("profile", DEFAULT_PROFILE)
+    resume      = data.get("resume",  DEFAULT_RESUME)
+    jd_text     = data.get("jd_text","").strip()
+    custom_jobs = data.get("custom_jobs", None)  # uploaded CSV jobs
 
     q = queue.Queue()
     def stream():

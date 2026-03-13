@@ -100,6 +100,18 @@ textarea{min-height:130px}
 .section-wrap{display:none}
 .section-wrap.visible{display:block;animation:fadeIn .4s ease}
 
+
+.upload-zone{border:2px dashed rgba(124,255,212,.3);border-radius:10px;padding:18px;text-align:center;cursor:pointer;transition:all .2s;background:rgba(124,255,212,.03)}
+.upload-zone:hover,.upload-zone.dragover{border-color:var(--accent);background:rgba(124,255,212,.08)}
+.upload-zone input[type=file]{display:none}
+.upload-zone .uz-icon{font-size:24px;margin-bottom:6px}
+.upload-zone .uz-text{font-size:11px;color:var(--muted)}
+.upload-zone .uz-hint{font-size:10px;color:var(--muted);margin-top:3px}
+.upload-success{font-size:10px;color:var(--accent);margin-top:6px;display:none}
+.tab-toggle{display:flex;gap:4px;margin-bottom:10px}
+.tab-toggle button{flex:1;padding:5px;border:1px solid var(--border);border-radius:6px;background:var(--surface2);color:var(--muted);font-size:10px;cursor:pointer;transition:all .2s}
+.tab-toggle button.active{border-color:var(--accent);color:var(--accent);background:rgba(124,255,212,.08)}
+
 .provider-btn{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 6px;cursor:pointer;color:var(--text);text-align:center;transition:all .2s;width:100%}
 .provider-btn:hover{border-color:rgba(124,255,212,.3);background:rgba(124,255,212,.05)}
 .provider-btn.active{border-color:var(--accent);background:rgba(124,255,212,.1);color:var(--accent)}
@@ -172,9 +184,50 @@ textarea{min-height:130px}
     </div>
 
     <div>
-      <div class="panel-title">Resume Text</div>
+      <div class="panel-title">Resume</div>
       <div class="card">
-        <textarea id="resume-text"></textarea>
+        <div class="tab-toggle">
+          <button class="active" onclick="setResumeMode('paste')" id="rm-paste">Paste Text</button>
+          <button onclick="setResumeMode('upload')" id="rm-upload">Upload PDF</button>
+        </div>
+        <div id="resume-paste-area">
+          <textarea id="resume-text"></textarea>
+        </div>
+        <div id="resume-upload-area" style="display:none">
+          <div class="upload-zone" id="pdf-zone" onclick="document.getElementById('pdf-input').click()"
+               ondragover="event.preventDefault();this.classList.add('dragover')"
+               ondragleave="this.classList.remove('dragover')"
+               ondrop="handlePdfDrop(event)">
+            <input type="file" id="pdf-input" accept=".pdf" onchange="handlePdfUpload(this.files[0])">
+            <div class="uz-icon">&#128196;</div>
+            <div class="uz-text">Drop PDF here or click to browse</div>
+            <div class="uz-hint">Text extracted automatically</div>
+          </div>
+          <div class="upload-success" id="pdf-success">&#10003; Resume extracted</div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel-title">Job Dataset</div>
+      <div class="card">
+        <div class="tab-toggle">
+          <button class="active" onclick="setDatasetMode('builtin')" id="dm-builtin">Built-in (26 jobs)</button>
+          <button onclick="setDatasetMode('upload')" id="dm-upload">Upload CSV</button>
+        </div>
+        <div id="dataset-builtin-area" style="font-size:10px;color:var(--muted)">Using 26 curated AI/ML job postings.</div>
+        <div id="dataset-upload-area" style="display:none">
+          <div class="upload-zone" id="csv-zone" onclick="document.getElementById('csv-input').click()"
+               ondragover="event.preventDefault();this.classList.add('dragover')"
+               ondragleave="this.classList.remove('dragover')"
+               ondrop="handleCsvDrop(event)">
+            <input type="file" id="csv-input" accept=".csv" onchange="handleCsvUpload(this.files[0])">
+            <div class="uz-icon">&#128202;</div>
+            <div class="uz-text">Drop CSV here or click to browse</div>
+            <div class="uz-hint">Must have: Job Title, Company, Location, Required Skills, Years Experience, Job Description, URL</div>
+          </div>
+          <div class="upload-success" id="csv-success">&#10003; Dataset loaded</div>
+        </div>
       </div>
     </div>
 
@@ -352,6 +405,74 @@ function setProvider(p) {
 }
 setProvider("groq");
 
+
+let uploadedResumeText = null;
+let uploadedJobs = null;
+
+function setResumeMode(mode) {
+  document.getElementById("rm-paste").classList.toggle("active", mode==="paste");
+  document.getElementById("rm-upload").classList.toggle("active", mode==="upload");
+  document.getElementById("resume-paste-area").style.display = mode==="paste" ? "" : "none";
+  document.getElementById("resume-upload-area").style.display = mode==="upload" ? "" : "none";
+}
+
+function setDatasetMode(mode) {
+  document.getElementById("dm-builtin").classList.toggle("active", mode==="builtin");
+  document.getElementById("dm-upload").classList.toggle("active", mode==="upload");
+  document.getElementById("dataset-builtin-area").style.display = mode==="builtin" ? "" : "none";
+  document.getElementById("dataset-upload-area").style.display = mode==="upload" ? "" : "none";
+  if (mode==="builtin") uploadedJobs = null;
+}
+
+async function handlePdfUpload(file) {
+  if (!file) return;
+  const fd = new FormData();
+  fd.append("file", file);
+  document.getElementById("pdf-zone").querySelector(".uz-text").textContent = "Extracting...";
+  try {
+    const r = await fetch("/api/extract_pdf", {method:"POST", body:fd});
+    const data = await r.json();
+    if (data.error) { alert("PDF error: " + data.error); return; }
+    uploadedResumeText = data.text;
+    document.getElementById("pdf-zone").querySelector(".uz-text").textContent = file.name;
+    document.getElementById("pdf-zone").querySelector(".uz-hint").textContent = data.word_count + " words extracted";
+    document.getElementById("pdf-success").style.display = "block";
+    document.getElementById("pdf-success").textContent = "✓ " + data.word_count + " words extracted from " + file.name;
+  } catch(e) { alert("Upload failed: " + e); }
+}
+
+function handlePdfDrop(e) {
+  e.preventDefault();
+  document.getElementById("pdf-zone").classList.remove("dragover");
+  const file = e.dataTransfer.files[0];
+  if (file) handlePdfUpload(file);
+}
+
+async function handleCsvUpload(file) {
+  if (!file) return;
+  const fd = new FormData();
+  fd.append("file", file);
+  document.getElementById("csv-zone").querySelector(".uz-text").textContent = "Parsing...";
+  try {
+    const r = await fetch("/api/parse_csv", {method:"POST", body:fd});
+    const data = await r.json();
+    if (data.error) { alert("CSV error: " + data.error); return; }
+    uploadedJobs = data.jobs;
+    document.getElementById("csv-zone").querySelector(".uz-text").textContent = file.name;
+    document.getElementById("csv-zone").querySelector(".uz-hint").textContent = data.count + " jobs loaded";
+    document.getElementById("csv-success").style.display = "block";
+    document.getElementById("csv-success").textContent = "✓ " + data.count + " jobs loaded from " + file.name;
+    document.getElementById("dm-builtin").textContent = "Built-in (26 jobs)";
+  } catch(e) { alert("Upload failed: " + e); }
+}
+
+function handleCsvDrop(e) {
+  e.preventDefault();
+  document.getElementById("csv-zone").classList.remove("dragover");
+  const file = e.dataTransfer.files[0];
+  if (file) handleCsvUpload(file);
+}
+
 function initSkills() {
   const grid = document.getElementById("skills-grid");
   ALL_SKILLS.forEach(skill => {
@@ -431,7 +552,7 @@ async function runAgent() {
   try {
     const resp = await fetch("/api/run", {
       method: "POST", headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({api_key: apiKey, provider, profile, resume, jd_text: jdText})
+      body: JSON.stringify({api_key: apiKey, provider, profile, resume, jd_text: jdText, custom_jobs: uploadedJobs})
     });
     const reader = resp.body.getReader();
     const dec = new TextDecoder();
