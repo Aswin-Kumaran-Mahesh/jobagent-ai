@@ -479,148 +479,270 @@ def parse_csv():
 
 @app.route("/api/generate_resume_pdf", methods=["POST"])
 def generate_resume_pdf():
-    from reportlab.lib.pagesizes import letter
-    from reportlab.lib import colors
-    from reportlab.lib.units import inch
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
-    from reportlab.lib.styles import ParagraphStyle
-    from reportlab.lib.enums import TA_CENTER, TA_LEFT
-    import io, re
+    import io, re, os, subprocess, tempfile
 
     data = request.json
     tailored_output = data.get("tailored_output", "")
     original_resume = data.get("resume", "")
-    job_title = data.get("job_title", "")
-    company = data.get("company", "")
-    candidate_name = data.get("candidate_name", "Candidate")
+    job_title       = data.get("job_title", "")
+    company         = data.get("company", "")
+    fmt             = data.get("format", "pdf")  # "pdf" or "latex"
 
-    # Parse sections from tailored output
     def extract_section(text, marker):
-        pattern = rf"---\s*{re.escape(marker)}\s*---\s*([\s\S]*?)(?=---\s*[A-Z]|$)"
+        # Match --- MARKER --- and capture until next --- or end
+        pattern = rf"---+\s*{re.escape(marker)}\s*---+\s*\n([\s\S]*?)(?=\n---+\s*[A-Z]|$)"
         m = re.search(pattern, text, re.IGNORECASE)
-        return m.group(1).strip() if m else ""
+        if m:
+            return m.group(1).strip()
+        # Fallback: simpler split approach
+        parts = re.split(r"---+[^-]+---+", text)
+        markers = re.findall(r"---+([^-]+)---+", text)
+        for i, mk in enumerate(markers):
+            if marker.lower() in mk.lower() and i+1 < len(parts):
+                return parts[i+1].strip()
+        return ""
 
     tailored_summary = extract_section(tailored_output, "TAILORED PROFESSIONAL SUMMARY")
-    bullets_raw = extract_section(tailored_output, "2 MODIFIED EXPERIENCE BULLETS")
-    aligned_skills = extract_section(tailored_output, "HIGHLIGHTED ALIGNED SKILLS")
+    bullets_raw      = extract_section(tailored_output, "2 MODIFIED EXPERIENCE BULLETS")
+    aligned_skills   = extract_section(tailored_output, "HIGHLIGHTED ALIGNED SKILLS")
 
-    # Extract bullets
-    bullet_lines = [l.strip().lstrip("*•-").strip() for l in bullets_raw.split("\n") if l.strip().startswith(("*","•","-"))]
+    # Clean summary — remove any bullet contamination
+    tailored_summary = re.sub(r"---.*$", "", tailored_summary, flags=re.MULTILINE).strip()
+    tailored_summary = re.sub(r"[*•]\s+.*", "", tailored_summary, flags=re.MULTILINE).strip()
 
-    # Build PDF in memory
-    buf = io.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=letter,
-                            leftMargin=0.75*inch, rightMargin=0.75*inch,
-                            topMargin=0.75*inch, bottomMargin=0.75*inch)
+    bullet_lines     = [l.strip().lstrip("*•-").strip()
+                        for l in bullets_raw.split("\n")
+                        if l.strip().startswith(("*","•","-"))]
 
-    DARK = colors.HexColor("#0F172A")
-    BLUE = colors.HexColor("#1E40AF")
-    TEAL = colors.HexColor("#0D9488")
-    MUTED = colors.HexColor("#64748B")
-    WHITE = colors.white
+    # ── Parse original resume ─────────────────────────────────────────────
+    orig_lines = [l.strip() for l in original_resume.split("\n")
+                  if l.strip() and not l.strip().startswith("(cid:")]
 
-    def S(name, **kw): return ParagraphStyle(name, **kw)
+    name_line    = orig_lines[0] if orig_lines else "Candidate"
+    contact_line = ""
+    for l in orig_lines[1:5]:
+        if "@" in l or "linkedin" in l.lower() or "|" in l:
+            contact_line = l; break
 
-    name_style = S("Name", fontSize=22, fontName="Helvetica-Bold", textColor=DARK, alignment=TA_CENTER, spaceAfter=2)
-    contact_style = S("Contact", fontSize=9, fontName="Helvetica", textColor=MUTED, alignment=TA_CENTER, spaceAfter=4)
-    section_style = S("Section", fontSize=11, fontName="Helvetica-Bold", textColor=BLUE, spaceBefore=12, spaceAfter=4)
-    body_style = S("Body", fontSize=9.5, fontName="Helvetica", textColor=DARK, spaceAfter=4, leading=14)
-    bullet_style = S("Bullet", fontSize=9.5, fontName="Helvetica", textColor=DARK, spaceAfter=3, leading=13, leftIndent=12)
-    tailor_badge = S("Badge", fontSize=8, fontName="Helvetica-Oblique", textColor=TEAL, spaceAfter=6, alignment=TA_CENTER)
-
-    def HR(): return HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#CBD5E1"), spaceAfter=4, spaceBefore=4)
-
-    story = []
-
-    # Extract contact info from original resume (first few lines)
-    orig_lines = [l.strip() for l in original_resume.split("\n") if l.strip()]
-    name_line = orig_lines[0] if orig_lines else candidate_name
-    contact_line = orig_lines[1] if len(orig_lines) > 1 else ""
-
-    # Header
-    story.append(Paragraph(name_line, name_style))
-    if contact_line:
-        story.append(Paragraph(contact_line, contact_style))
-    story.append(Paragraph(f"<i>Tailored for: {job_title} @ {company}</i>", tailor_badge))
-    story.append(HR())
-
-    # Tailored Summary
-    story.append(Paragraph("PROFESSIONAL SUMMARY", section_style))
-    story.append(HR())
-    if tailored_summary:
-        story.append(Paragraph(tailored_summary, body_style))
-    story.append(Spacer(1, 6))
-
-    # Parse and rebuild original resume sections, replacing summary and bullets
     sections = {}
     current_section = None
-    current_lines = []
-    skip_keywords = ["SUMMARY","OBJECTIVE","PROFILE"]
-    section_keywords = ["EDUCATION","EXPERIENCE","PROJECTS","SKILLS","PUBLICATIONS","CERTIFICATIONS","AWARDS"]
+    current_lines   = []
+    SKIP = ["SUMMARY","OBJECTIVE","PROFILE"]
+    SECS = ["EDUCATION","EXPERIENCE","PROJECT","SKILL","PUBLICATION","CERTIFICATION"]
 
-    for line in orig_lines[2:]:
-        is_section = any(kw in line.upper() for kw in section_keywords)
-        if is_section:
-            if current_section:
-                sections[current_section] = current_lines
-            current_section = line.strip()
-            current_lines = []
-        elif current_section and not any(kw in line.upper() for kw in skip_keywords):
+    for line in orig_lines:
+        if any(kw in line.upper() for kw in SKIP): continue
+        is_sec = any(kw in line.upper() for kw in SECS) and len(line) < 40
+        if is_sec:
+            if current_section: sections[current_section] = current_lines
+            current_section = line.strip().upper(); current_lines = []
+        elif current_section:
             current_lines.append(line)
     if current_section:
         sections[current_section] = current_lines
 
-    # Education
-    edu_key = next((k for k in sections if "EDUCATION" in k.upper()), None)
-    if edu_key:
-        story.append(Paragraph("EDUCATION", section_style))
-        story.append(HR())
-        for l in sections[edu_key]:
-            if l:
-                story.append(Paragraph(l, body_style))
-        story.append(Spacer(1, 4))
+    def tex_escape(s):
+        replacements = [("&","\\&"),("%","\\%"),("$","\\$"),("#","\\#"),
+                        ("_","\\_"),("{","\\{"),("}","\\}"),("~","\\textasciitilde{}"),
+                        ("^","\\textasciicircum{}"),("\\","\\textbackslash{}")]
+        for old, new in replacements:
+            s = s.replace(old, new)
+        return s
 
-    # Experience — inject improved bullets
-    exp_key = next((k for k in sections if "EXPERIENCE" in k.upper()), None)
+    def tex(s): return tex_escape(str(s))
+
+    # ── Build LaTeX (Jake's Resume style) ───────────────────────────────
+    latex = r"""\documentclass[letterpaper,10pt]{article}
+\usepackage[left=0.5in,right=0.5in,top=0.4in,bottom=0.4in]{geometry}
+\usepackage{latexsym}
+\usepackage{titlesec}
+\usepackage{marvosym}
+\usepackage[usenames,dvipsnames]{color}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage{tabularx}
+\usepackage{fontenc}
+\usepackage{inputenc}
+\input{glyphtounicode}
+\hypersetup{colorlinks=false}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot{}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+\raggedbottom
+\raggedright
+\setlength{\tabcolsep}{0in}
+\titleformat{\section}{\vspace{-4pt}\scshape\raggedright\large}{}{0em}{}[\color{black}\titlerule \vspace{-5pt}]
+\pdfgentounicode=1
+\newcommand{\resumeItem}[1]{\item\small{#1 \vspace{-2pt}}}
+\newcommand{\resumeSubheading}[4]{
+  \vspace{-2pt}\item
+  \begin{tabular*}{0.97\textwidth}[t]{l@{\extracolsep{\fill}}r}
+    \textbf{#1} & #2 \\
+    \textit{\small#3} & \textit{\small #4} \\
+  \end{tabular*}\vspace{-7pt}
+}
+\newcommand{\resumeProjectHeading}[2]{
+  \item
+  \begin{tabular*}{0.97\textwidth}{l@{\extracolsep{\fill}}r}
+    \small#1 & #2 \\
+  \end{tabular*}\vspace{-7pt}
+}
+\newcommand{\resumeSubHeadingListStart}{\begin{itemize}[leftmargin=0.15in, label={}]}
+\newcommand{\resumeSubHeadingListEnd}{\end{itemize}}
+\newcommand{\resumeItemListStart}{\begin{itemize}}
+\newcommand{\resumeItemListEnd}{\end{itemize}\vspace{-5pt}}
+\begin{document}
+"""
+
+    # Header
+    latex += f"""\\begin{{center}}
+    {{\\Huge \\scshape {tex(name_line)}}} \\\\ \\vspace{{1pt}}
+    \\small {tex(contact_line)} \\\\ \\vspace{{1pt}}
+    \\textit{{\\small Tailored for: {tex(job_title)} at {tex(company)}}}
+\\end{{center}}
+\\vspace{{-10pt}}
+"""
+
+    # Summary
+    latex += "\\section{Summary}\n"
+    latex += f"\\resumeSubHeadingListStart\n\\item \\small{{{tex(tailored_summary)}}}\n\\resumeSubHeadingListEnd\n\n"
+
+    # Education
+    edu_key = next((k for k in sections if "EDUCATION" in k), None)
+    if edu_key:
+        latex += "\\section{Education}\n\\resumeSubHeadingListStart\n"
+        edu_lines = sections[edu_key]
+        i = 0
+        while i < len(edu_lines):
+            l = edu_lines[i]
+            if not l:
+                i += 1; continue
+            # Try to pair institution+date and degree+gpa
+            next_l = edu_lines[i+1] if i+1 < len(edu_lines) else ""
+            if any(x in l for x in ["University","College","Institute"]):
+                # Extract year range if present
+                import re as re2
+                date_m = re2.search(r'(\w+ \d{4})\s*[-–]\s*(\w+ \d{4}|\w+ \d{4})', l)
+                date_str = date_m.group(0) if date_m else ""
+                inst = re2.sub(r'\s*' + re2.escape(date_str), '', l).strip() if date_str else l
+                degree = next_l if next_l else ""
+                latex += f"  \\resumeSubheading{{{tex(inst)}}}{{{tex(date_str)}}}{{{tex(degree)}}}{{}}\n"
+                i += 2
+            else:
+                i += 1
+        latex += "\\resumeSubHeadingListEnd\n\n"
+
+    # Experience
+    exp_key = next((k for k in sections if "EXPERIENCE" in k), None)
     if exp_key:
-        story.append(Paragraph("EXPERIENCE", section_style))
-        story.append(HR())
+        latex += "\\section{Experience}\n\\resumeSubHeadingListStart\n"
         exp_lines = sections[exp_key]
         injected = 0
+        in_items = False
         for l in exp_lines:
-            if l.startswith(("*","•","-")) and injected < len(bullet_lines):
-                story.append(Paragraph(f"• {bullet_lines[injected]}", bullet_style))
-                injected += 1
-            elif l:
-                story.append(Paragraph(l, body_style))
-        story.append(Spacer(1, 4))
+            if not l: continue
+            is_bul = l.startswith(("*","•","-","·"))
+            if is_bul:
+                if not in_items:
+                    latex += "  \\resumeItemListStart\n"
+                    in_items = True
+                if injected < len(bullet_lines):
+                    latex += f"    \\resumeItem{{{tex(bullet_lines[injected])}}}\n"
+                    injected += 1
+                else:
+                    latex += f"    \\resumeItem{{{tex(l.lstrip('*•-· ').strip())}}}\n"
+            else:
+                if in_items:
+                    latex += "  \\resumeItemListEnd\n"
+                    in_items = False
+                # Check if it looks like a job title line
+                import re as re2
+                date_m = re2.search(r'(\w{3} \d{4})\s*[-–]+\s*(\w{3} \d{4}|Present|present)', l)
+                if date_m:
+                    date_str = date_m.group(0)
+                    rest = l.replace(date_str, "").strip()
+                    # next line might be location/title
+                    latex += f"  \\resumeSubheading{{{tex(rest)}}}{{{tex(date_str)}}}{{}}{{}}\n"
+                else:
+                    latex += f"  \\resumeSubheading{{{tex(l)}}}{{}}{{}}{{}}\n"
+        if in_items:
+            latex += "  \\resumeItemListEnd\n"
+        latex += "\\resumeSubHeadingListEnd\n\n"
 
     # Projects
-    proj_key = next((k for k in sections if "PROJECT" in k.upper()), None)
+    proj_key = next((k for k in sections if "PROJECT" in k), None)
     if proj_key:
-        story.append(Paragraph("PROJECTS", section_style))
-        story.append(HR())
+        latex += "\\section{Projects}\n\\resumeSubHeadingListStart\n"
+        in_items = False
         for l in sections[proj_key]:
-            if l.startswith(("*","•","-")):
-                story.append(Paragraph(f"• {l.lstrip('*•- ').strip()}", bullet_style))
-            elif l:
-                story.append(Paragraph(l, body_style))
-        story.append(Spacer(1, 4))
+            if not l: continue
+            if l.startswith(("*","•","-","·")):
+                if not in_items:
+                    latex += "  \\resumeItemListStart\n"
+                    in_items = True
+                latex += f"    \\resumeItem{{{tex(l.lstrip('*•-· ').strip())}}}\n"
+            else:
+                if in_items:
+                    latex += "  \\resumeItemListEnd\n"
+                    in_items = False
+                latex += f"  \\resumeProjectHeading{{\\textbf{{{tex(l)}}}}}{{}}\n"
+        if in_items:
+            latex += "  \\resumeItemListEnd\n"
+        latex += "\\resumeSubHeadingListEnd\n\n"
 
-    # Aligned Skills from tailoring
+    # Skills
     if aligned_skills:
-        story.append(Paragraph("KEY SKILLS (TAILORED)", section_style))
-        story.append(HR())
-        story.append(Paragraph(aligned_skills, body_style))
-        story.append(Spacer(1, 4))
+        latex += "\\section{Technical Skills}\n\\resumeSubHeadingListStart\n"
+        latex += f"  \\item \\small{{\\textbf{{Aligned Skills}}: {tex(aligned_skills)}}}\n"
+        latex += "\\resumeSubHeadingListEnd\n\n"
 
-    doc.build(story)
-    buf.seek(0)
+    latex += "\\end{document}\n"
 
-    from flask import send_file
-    safe_name = f"Resume_Tailored_{job_title.replace(' ','-').replace('/','-')}.pdf"
-    return send_file(buf, mimetype="application/pdf",
-                     as_attachment=True, download_name=safe_name)
+    # Return LaTeX source
+    if fmt == "latex":
+        from flask import make_response
+        resp = make_response(latex)
+        resp.headers["Content-Type"] = "text/plain"
+        resp.headers["Content-Disposition"] = "attachment; filename=resume_tailored.tex"
+        return resp
+
+    # Compile to PDF
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tex_path = os.path.join(tmpdir, "resume.tex")
+            with open(tex_path, "w", encoding="utf-8") as f:
+                f.write(latex)
+            result = subprocess.run(
+                ["pdflatex", "-interaction=nonstopmode", "-output-directory", tmpdir, tex_path],
+                capture_output=True, text=True, timeout=30
+            )
+            pdf_path = os.path.join(tmpdir, "resume.pdf")
+            if os.path.exists(pdf_path):
+                with open(pdf_path, "rb") as f:
+                    pdf_bytes = f.read()
+                from flask import make_response
+                safe_name = f"Resume_{job_title.replace(' ','-')}_Tailored.pdf"
+                resp = make_response(pdf_bytes)
+                resp.headers["Content-Type"] = "application/pdf"
+                resp.headers["Content-Disposition"] = f"attachment; filename={safe_name}"
+                return resp
+            else:
+                # pdflatex failed — return LaTeX source as fallback
+                from flask import make_response
+                resp = make_response(latex)
+                resp.headers["Content-Type"] = "text/plain"
+                resp.headers["Content-Disposition"] = "attachment; filename=resume_tailored.tex"
+                return resp
+    except Exception as e:
+        from flask import make_response
+        resp = make_response(latex)
+        resp.headers["Content-Type"] = "text/plain"
+        resp.headers["Content-Disposition"] = "attachment; filename=resume_tailored.tex"
+        return resp
+
 
 @app.route("/")
 def index():

@@ -117,6 +117,22 @@ textarea{min-height:130px}
 .dl-btn:hover{opacity:.85}
 .dl-btn:disabled{opacity:.4;cursor:not-allowed}
 
+
+.preview-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000;align-items:center;justify-content:center}
+.preview-modal.open{display:flex}
+.preview-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;width:90vw;max-width:900px;height:88vh;display:flex;flex-direction:column;overflow:hidden}
+.preview-header{display:flex;align-items:center;justify-content:space-between;padding:12px 18px;border-bottom:1px solid var(--border);flex-shrink:0}
+.preview-title{font-size:12px;font-weight:700;color:var(--accent);letter-spacing:.5px}
+.preview-tabs{display:flex;gap:4px}
+.preview-tab{padding:4px 12px;border:1px solid var(--border);border-radius:6px;background:var(--surface2);color:var(--muted);font-size:10px;cursor:pointer;transition:all .2s}
+.preview-tab.active{border-color:var(--accent);color:var(--accent);background:rgba(124,255,212,.08)}
+.preview-close{background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;padding:0 4px;line-height:1}
+.preview-close:hover{color:var(--text)}
+.preview-body{flex:1;overflow:hidden;position:relative}
+.preview-body iframe{width:100%;height:100%;border:none;background:#fff}
+.preview-body pre{margin:0;padding:16px;overflow:auto;height:100%;font-size:11px;line-height:1.6;color:#e2e8f0;background:#0d1117;font-family:"DM Mono",monospace;white-space:pre-wrap;word-break:break-word}
+.preview-loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:12px}
+
 .provider-btn{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 6px;cursor:pointer;color:var(--text);text-align:center;transition:all .2s;width:100%}
 .provider-btn:hover{border-color:rgba(124,255,212,.3);background:rgba(124,255,212,.05)}
 .provider-btn.active{border-color:var(--accent);background:rgba(124,255,212,.1);color:var(--accent)}
@@ -674,6 +690,7 @@ let lastTailorData = null;
 
 function renderTailor(data) {
   lastTailorData = data;
+  cachedPdfUrl = null; cachedLatex = null; // clear cache on new result
   document.getElementById("tailor-ph").style.display="none";
   document.getElementById("tailor-section").classList.add("visible");
   const jdBadge = data.used_custom_jd
@@ -686,13 +703,21 @@ function renderTailor(data) {
         <div class="tailor-sub">${esc(data.company)} &middot; Top-ranked match</div>
       </div>
       <div class="tailor-content">${esc(data.tailored_output)}</div>
-      <button class="dl-btn" onclick="downloadResumePDF()" id="dl-resume-btn">
-        &#11123; Download Full Resume PDF
-      </button>
+      <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+        <button class="dl-btn" onclick="downloadResumePDF('pdf')" id="dl-resume-btn">
+          &#11123; Download PDF
+        </button>
+        <button class="dl-btn" onclick="downloadResumePDF('latex')" id="dl-latex-btn" style="background:linear-gradient(135deg,#1E40AF,#1E3A8A)">
+          &#128196; Get LaTeX (Overleaf)
+        </button>
+        <button class="dl-btn" onclick="openPreview()" id="preview-btn" style="background:linear-gradient(135deg,#7C3AED,#6D28D9)">
+          &#128065; Preview Resume
+        </button>
+      </div>
     </div>`;
 }
 
-async function downloadResumePDF() {
+async function downloadResumePDF(fmt="pdf") {
   const btn = document.getElementById("dl-resume-btn");
   btn.disabled = true;
   btn.textContent = "Generating PDF...";
@@ -707,25 +732,139 @@ async function downloadResumePDF() {
         resume: resume,
         job_title: lastTailorData.job_tailored_for,
         company: lastTailorData.company,
-        candidate_name: candidateName
+        candidate_name: candidateName,
+        format: fmt
       })
     });
-    if (!resp.ok) { alert("PDF generation failed"); return; }
+    if (!resp.ok) { alert("Generation failed"); btn.disabled=false; return; }
     const blob = await resp.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `Resume_Tailored_${lastTailorData.job_tailored_for.replace(/ /g,"-")}.pdf`;
+    const ext = fmt === "latex" ? "tex" : "pdf";
+    a.download = `Resume_${lastTailorData.job_tailored_for.replace(/ /g,"-")}_Tailored.${ext}`;
     a.click();
     URL.revokeObjectURL(url);
-    btn.textContent = "✓ Downloaded!";
-    setTimeout(() => { btn.disabled = false; btn.innerHTML = "&#11123; Download Full Resume PDF"; }, 2000);
+    btn.textContent = "✓ Done!";
+    setTimeout(() => {
+      btn.disabled = false;
+      btn.innerHTML = fmt === "latex" ? "&#128196; Get LaTeX (Overleaf)" : "&#11123; Download PDF";
+    }, 2000);
   } catch(e) {
     alert("Error: " + e);
     btn.disabled = false;
-    btn.innerHTML = "&#11123; Download Full Resume PDF";
+    btn.innerHTML = fmt === "latex" ? "&#128196; Get LaTeX (Overleaf)" : "&#11123; Download PDF";
   }
 }
+
+
+let cachedPdfUrl = null;
+let cachedLatex = null;
+
+async function openPreview() {
+  document.getElementById("preview-modal").classList.add("open");
+  document.getElementById("preview-loading").style.display = "flex";
+  document.getElementById("preview-pdf-frame").style.display = "none";
+  document.getElementById("preview-latex-code").style.display = "none";
+  switchPreviewTab("pdf");
+  await loadPreviewPdf();
+}
+
+async function loadPreviewPdf() {
+  if (cachedPdfUrl) {
+    showPdfFrame(cachedPdfUrl);
+    return;
+  }
+  try {
+    const resume = uploadedResumeText || document.getElementById("resume-text").value.trim();
+    const candidateName = document.getElementById("cand-name").value.trim() || "Candidate";
+    const resp = await fetch("/api/generate_resume_pdf", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({
+        tailored_output: lastTailorData.tailored_output,
+        resume: resume,
+        job_title: lastTailorData.job_tailored_for,
+        company: lastTailorData.company,
+        candidate_name: candidateName,
+        format: "pdf"
+      })
+    });
+    if (!resp.ok) { alert("Preview generation failed"); closePreview(); return; }
+    const blob = await resp.blob();
+    cachedPdfUrl = URL.createObjectURL(blob);
+    showPdfFrame(cachedPdfUrl);
+  } catch(e) { alert("Preview error: " + e); closePreview(); }
+}
+
+async function loadPreviewLatex() {
+  if (cachedLatex) {
+    showLatexCode(cachedLatex);
+    return;
+  }
+  try {
+    const resume = uploadedResumeText || document.getElementById("resume-text").value.trim();
+    const candidateName = document.getElementById("cand-name").value.trim() || "Candidate";
+    const resp = await fetch("/api/generate_resume_pdf", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({
+        tailored_output: lastTailorData.tailored_output,
+        resume: resume,
+        job_title: lastTailorData.job_tailored_for,
+        company: lastTailorData.company,
+        candidate_name: candidateName,
+        format: "latex"
+      })
+    });
+    if (!resp.ok) { alert("LaTeX fetch failed"); return; }
+    cachedLatex = await resp.text();
+    showLatexCode(cachedLatex);
+  } catch(e) { alert("LaTeX error: " + e); }
+}
+
+function showPdfFrame(url) {
+  document.getElementById("preview-loading").style.display = "none";
+  document.getElementById("preview-pdf-frame").style.display = "block";
+  document.getElementById("preview-pdf-frame").src = url;
+}
+
+function showLatexCode(code) {
+  document.getElementById("preview-loading").style.display = "none";
+  document.getElementById("preview-latex-code").style.display = "block";
+  document.getElementById("preview-latex-code").textContent = code;
+}
+
+function switchPreviewTab(tab) {
+  document.getElementById("ptab-pdf").classList.toggle("active", tab==="pdf");
+  document.getElementById("ptab-latex").classList.toggle("active", tab==="latex");
+  if (tab === "pdf") {
+    document.getElementById("preview-latex-code").style.display = "none";
+    if (cachedPdfUrl) {
+      showPdfFrame(cachedPdfUrl);
+    } else {
+      document.getElementById("preview-loading").style.display = "flex";
+      document.getElementById("preview-pdf-frame").style.display = "none";
+      loadPreviewPdf();
+    }
+  } else {
+    document.getElementById("preview-pdf-frame").style.display = "none";
+    if (cachedLatex) {
+      showLatexCode(cachedLatex);
+    } else {
+      document.getElementById("preview-loading").style.display = "flex";
+      document.getElementById("preview-latex-code").style.display = "none";
+      loadPreviewLatex();
+    }
+  }
+}
+
+function closePreview() {
+  document.getElementById("preview-modal").classList.remove("open");
+}
+
+// Clear cache when new tailor result comes in
+const origRenderTailor = renderTailor;
 
 async function loadDataset() {
   try {
@@ -751,5 +890,27 @@ function esc(t) {
   return (t||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 }
 </script>
+
+<!-- Preview Modal -->
+<div class="preview-modal" id="preview-modal">
+  <div class="preview-box">
+    <div class="preview-header">
+      <span class="preview-title">RESUME PREVIEW</span>
+      <div style="display:flex;align-items:center;gap:8px">
+        <div class="preview-tabs">
+          <button class="preview-tab active" id="ptab-pdf" onclick="switchPreviewTab('pdf')">PDF Preview</button>
+          <button class="preview-tab" id="ptab-latex" onclick="switchPreviewTab('latex')">LaTeX Source</button>
+        </div>
+        <button class="preview-close" onclick="closePreview()">&#10005;</button>
+      </div>
+    </div>
+    <div class="preview-body">
+      <div class="preview-loading" id="preview-loading">Generating preview...</div>
+      <iframe id="preview-pdf-frame" style="display:none"></iframe>
+      <pre id="preview-latex-code" style="display:none"></pre>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>
