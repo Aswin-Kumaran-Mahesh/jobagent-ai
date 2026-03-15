@@ -708,10 +708,13 @@ function renderTailor(data) {
           &#11123; Download PDF
         </button>
         <button class="dl-btn" onclick="downloadResumePDF('latex')" id="dl-latex-btn" style="background:linear-gradient(135deg,#1E40AF,#1E3A8A)">
-          &#128196; Get LaTeX (Overleaf)
+          &#128196; Download LaTeX
         </button>
-        <button class="dl-btn" onclick="openPreview()" id="preview-btn" style="background:linear-gradient(135deg,#7C3AED,#6D28D9)">
-          &#128065; Preview Resume
+        <button class="dl-btn" onclick="openPreview('pdf')" id="preview-btn" style="background:linear-gradient(135deg,#7C3AED,#6D28D9)">
+          &#128065; Preview PDF
+        </button>
+        <button class="dl-btn" onclick="openPreview('latex')" id="latex-preview-btn" style="background:linear-gradient(135deg,#0D9488,#0F766E)">
+          &#128196; Preview LaTeX
         </button>
       </div>
     </div>`;
@@ -761,12 +764,12 @@ async function downloadResumePDF(fmt="pdf") {
 let cachedPdfUrl = null;
 let cachedLatex = null;
 
-async function openPreview() {
+async function openPreview(tab="pdf") {
   document.getElementById("preview-modal").classList.add("open");
   document.getElementById("preview-loading").style.display = "flex";
   document.getElementById("preview-pdf-frame").style.display = "none";
   document.getElementById("preview-latex-code").style.display = "none";
-  switchPreviewTab("pdf");
+  switchPreviewTab(tab);
   await loadPreviewPdf();
 }
 
@@ -825,8 +828,20 @@ async function loadPreviewLatex() {
 
 function showPdfFrame(url) {
   document.getElementById("preview-loading").style.display = "none";
-  document.getElementById("preview-pdf-frame").style.display = "block";
-  document.getElementById("preview-pdf-frame").src = url;
+  const frame = document.getElementById("preview-pdf-frame");
+  frame.style.display = "block";
+  // Embed PDF inline using object tag for better browser support
+  const container = frame.parentElement;
+  const existing = document.getElementById("pdf-embed-obj");
+  if (existing) existing.remove();
+  const obj = document.createElement("object");
+  obj.id = "pdf-embed-obj";
+  obj.data = url + "#toolbar=1&navpanes=0";
+  obj.type = "application/pdf";
+  obj.style.cssText = "width:100%;height:100%;border:none;display:block";
+  obj.innerHTML = '<p style="padding:20px;color:#94a3b8;font-size:12px">PDF preview not supported in this browser. <a href="' + url + '" target="_blank" style="color:var(--accent)">Click here to open</a></p>';
+  frame.style.display = "none";
+  container.appendChild(obj);
 }
 
 function showLatexCode(code) {
@@ -857,6 +872,30 @@ function switchPreviewTab(tab) {
       loadPreviewLatex();
     }
   }
+}
+
+
+function copyLatex() {
+  if (!cachedLatex) {
+    alert("Load LaTeX preview first");
+    return;
+  }
+  navigator.clipboard.writeText(cachedLatex).then(() => {
+    const btn = document.getElementById("ptab-copy");
+    btn.textContent = "✓ Copied!";
+    setTimeout(() => { btn.innerHTML = "&#128203; Copy LaTeX"; }, 2000);
+  }).catch(() => {
+    // Fallback
+    const ta = document.createElement("textarea");
+    ta.value = cachedLatex;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    document.body.removeChild(ta);
+    const btn = document.getElementById("ptab-copy");
+    btn.textContent = "✓ Copied!";
+    setTimeout(() => { btn.innerHTML = "&#128203; Copy LaTeX"; }, 2000);
+  });
 }
 
 function closePreview() {
@@ -898,8 +937,10 @@ function esc(t) {
       <span class="preview-title">RESUME PREVIEW</span>
       <div style="display:flex;align-items:center;gap:8px">
         <div class="preview-tabs">
-          <button class="preview-tab active" id="ptab-pdf" onclick="switchPreviewTab('pdf')">PDF Preview</button>
-          <button class="preview-tab" id="ptab-latex" onclick="switchPreviewTab('latex')">LaTeX Source</button>
+          <button class="preview-tab active" id="ptab-pdf" onclick="switchPreviewTab('pdf')">&#128065; PDF Preview</button>
+          <button class="preview-tab" id="ptab-latex" onclick="switchPreviewTab('latex')">&#128196; LaTeX Code</button>
+          <button class="preview-tab" id="ptab-copy" onclick="copyLatex()" style="background:rgba(13,148,136,.15);color:#0D9488;border-color:#0D9488">&#128203; Copy LaTeX</button>
+          <button class="preview-tab" id="ptab-open" onclick="if(cachedPdfUrl)window.open(cachedPdfUrl,'_blank')" style="background:rgba(124,255,212,.1);color:var(--accent);border-color:var(--accent)">&#8599; Open PDF</button>
         </div>
         <button class="preview-close" onclick="closePreview()">&#10005;</button>
       </div>

@@ -479,7 +479,8 @@ def parse_csv():
 
 @app.route("/api/generate_resume_pdf", methods=["POST"])
 def generate_resume_pdf():
-    import io, re, os, subprocess, tempfile
+    import re, io
+    from flask import make_response
 
     data            = request.json
     tailored_output = data.get("tailored_output", "")
@@ -488,247 +489,183 @@ def generate_resume_pdf():
     company         = data.get("company", "")
     fmt             = data.get("format", "pdf")
 
-    def tex(s):
-        s = str(s)
-        replacements = [
-            ("\\", "BKSL"),
-            ("&", r"\&"), ("%", r"\%"), ("$", r"\$"),
-            ("#", r"\#"), ("_", r"\_"), ("{", r"\{"),
-            ("}", r"\}"), ("~", r"\textasciitilde{}"),
-            ("^", r"\textasciicircum{}"),
-            ("BKSL", r"\textbackslash{}"),
-        ]
-        for old, new in replacements:
-            s = s.replace(old, new)
-        return s
+    def esc(s):
+        return str(s).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
 
     def extract(text, marker):
         parts = re.split(r"-{2,}\s*[A-Z][A-Z ]*[A-Z]\s*-{2,}", text)
         headers = re.findall(r"-{2,}\s*([A-Z][A-Z ]*[A-Z])\s*-{2,}", text)
         for i, h in enumerate(headers):
-            if marker.upper() in h.upper() and i + 1 < len(parts):
-                return parts[i + 1].strip()
+            if marker.upper() in h.upper() and i+1 < len(parts):
+                return parts[i+1].strip()
         return ""
 
     summary = extract(tailored_output, "TAILORED PROFESSIONAL SUMMARY")
     summary = re.sub(r"(?m)^[*•\-].*$", "", summary).strip()
     summary = re.sub(r"\s+", " ", summary).strip()
-
     bul_raw = extract(tailored_output, "MODIFIED EXPERIENCE BULLETS")
     bullets = [l.strip().lstrip("*•- ").strip()
                for l in bul_raw.splitlines()
-               if l.strip().startswith(("*", "•", "-"))]
+               if l.strip().startswith(("*","•","-"))]
+    skills  = extract(tailored_output, "HIGHLIGHTED ALIGNED SKILLS")
 
-    skills = extract(tailored_output, "HIGHLIGHTED ALIGNED SKILLS")
-
-    # Parse resume lines
-    lines = [l.strip() for l in original_resume.splitlines()
-             if l.strip() and not l.strip().startswith("(cid:")]
-
-    name_line = lines[0] if lines else "Candidate"
+    raw = [l.strip() for l in original_resume.splitlines()
+           if l.strip() and not l.strip().startswith("(cid:")]
+    name_line    = raw[0] if raw else "Candidate"
     contact_line = ""
-    for l in lines[1:5]:
+    for l in raw[1:5]:
         if "@" in l or "linkedin" in l.lower() or "|" in l:
-            contact_line = l
-            break
+            contact_line = l; break
 
-    SKIP = {"SUMMARY", "OBJECTIVE", "PROFILE"}
-    SECS = ["EDUCATION", "EXPERIENCE", "PROJECT", "SKILL", "PUBLICATION", "CERTIFICATION"]
-    sections, cur_sec, cur_lines = {}, None, []
-    for line in lines:
-        upper = line.upper()
-        if any(kw in upper for kw in SKIP):
-            continue
-        if any(kw in upper for kw in SECS) and len(line) < 45:
-            if cur_sec:
-                sections[cur_sec] = cur_lines
-            cur_sec, cur_lines = upper, []
-        elif cur_sec:
-            cur_lines.append(line)
-    if cur_sec:
-        sections[cur_sec] = cur_lines
+    SECS = ["EDUCATION","EXPERIENCE","PROJECT","SKILL","PUBLICATION","CERTIFICATION"]
+    SKIP = {"SUMMARY","OBJECTIVE","PROFILE"}
+    secs, cur, cur_l = {}, None, []
+    for line in raw:
+        up = line.upper()
+        if any(k in up for k in SKIP): continue
+        if any(k in up for k in SECS) and len(line) < 45:
+            if cur: secs[cur] = cur_l
+            cur, cur_l = up, []
+        elif cur: cur_l.append(line)
+    if cur: secs[cur] = cur_l
 
-    # Build LaTeX using raw strings only
-    L = []
-    L += [
-        r"\documentclass[letterpaper,10pt]{article}",
-        r"\usepackage[left=0.55in,right=0.55in,top=0.45in,bottom=0.45in]{geometry}",
-        r"\usepackage{latexsym,titlesec,enumitem,hyperref,fancyhdr,tabularx}",
-        r"\usepackage[usenames,dvipsnames]{color}",
-        r"\usepackage[T1]{fontenc}",
-        r"\usepackage[utf8]{inputenc}",
-        r"\input{glyphtounicode}",
-        r"\hypersetup{colorlinks=false}",
-        r"\pagestyle{fancy}\fancyhf{}\fancyfoot{}",
-        r"\renewcommand{\headrulewidth}{0pt}",
-        r"\renewcommand{\footrulewidth}{0pt}",
-        r"\raggedbottom\raggedright",
-        r"\setlength{\tabcolsep}{0in}",
-        r"\titleformat{\section}{\vspace{-4pt}\scshape\raggedright\large}{}{0em}{}[\color{black}\titlerule\vspace{-5pt}]",
-        r"\pdfgentounicode=1",
-        r"\newcommand{\resumeItem}[1]{\item\small{#1\vspace{-2pt}}}",
-        r"\newcommand{\resumeSubheading}[4]{\vspace{-2pt}\item",
-        r"  \begin{tabular*}{0.97\textwidth}[t]{l@{\extracolsep{\fill}}r}",
-        r"    \textbf{#1} & #2 \\",
-        r"    \textit{\small#3} & \textit{\small#4} \\",
-        r"  \end{tabular*}\vspace{-7pt}}",
-        r"\newcommand{\resumeProjectHeading}[2]{\item",
-        r"  \begin{tabular*}{0.97\textwidth}{l@{\extracolsep{\fill}}r}",
-        r"    \small#1 & #2 \\",
-        r"  \end{tabular*}\vspace{-7pt}}",
-        r"\newcommand{\resumeSubHeadingListStart}{\begin{itemize}[leftmargin=0.15in,label={}]}",
-        r"\newcommand{\resumeSubHeadingListEnd}{\end{itemize}}",
-        r"\newcommand{\resumeItemListStart}{\begin{itemize}}",
-        r"\newcommand{\resumeItemListEnd}{\end{itemize}\vspace{-5pt}}",
-        r"\begin{document}",
-        r"\begin{center}",
-    ]
-
-    L.append(r"  {\Huge \scshape " + tex(name_line) + r"} \\[2pt]")
-    if contact_line.strip():
-        L.append(r"  \small " + tex(contact_line) + r" \\[1pt]")
-    L.append(r"  \textit{\small Tailored for: " + tex(job_title) + " at " + tex(company) + "}")
-    L += [r"\end{center}", r"\vspace{-8pt}"]
-
-    # Summary
-    if summary:
-        L += [r"\section{Summary}", r"\resumeSubHeadingListStart",
-              r"  \item \small{" + tex(summary) + "}",
-              r"\resumeSubHeadingListEnd"]
-
-    # Education
-    edu_key = next((k for k in sections if "EDUCATION" in k), None)
+    # Education HTML
+    edu_html = ""
+    edu_key = next((k for k in secs if "EDUCATION" in k), None)
     if edu_key:
-        L += [r"\section{Education}", r"\resumeSubHeadingListStart"]
-        edu_lines = sections[edu_key]
-        i = 0
+        edu_lines = secs[edu_key]; i = 0
         while i < len(edu_lines):
             l = edu_lines[i]
-            if not l:
-                i += 1; continue
-            dm = re.search(r"(\w[\w ]*\d{4})\s*[-–]+\s*(\w[\w ]*\d{4})", l)
+            if not l: i+=1; continue
+            dm = re.search(r"((?:\w+ )?\d{4})\s*[-\u2013]+\s*((?:\w+ )?\d{0,4})", l)
             if any(x in l for x in ["University","College","Institute","School"]):
-                date_str = dm.group(0) if dm else ""
-                inst = l.replace(date_str, "").strip(" -–") if date_str else l
+                date_str = dm.group(0).strip() if dm else ""
+                inst = l.replace(date_str,"").strip(" -") if date_str else l
                 nxt = edu_lines[i+1] if i+1 < len(edu_lines) else ""
-                degree = nxt if nxt and not any(x in nxt.upper() for x in ["UNIVERSITY","COLLEGE","INSTITUTE"]) else ""
-                L.append(r"  \resumeSubheading{" + tex(inst) + "}{" + tex(date_str) + "}{" + tex(degree) + "}{}")
+                degree = nxt if nxt and not any(x in nxt.upper() for x in ["UNIVERSITY","COLLEGE"]) else ""
+                edu_html += ("<div class=\"entry\">"
+                    + "<div class=\"eh\"><span class=\"ed\">" + esc(date_str) + "</span>"
+                    + "<span class=\"et\">" + esc(inst) + "</span></div>"
+                    + "<div><span class=\"er\">" + esc(degree) + "</span></div></div>")
                 i += 2 if degree else 1
-            else:
-                i += 1
-        L.append(r"\resumeSubHeadingListEnd")
+            else: i += 1
 
-    # Experience
-    exp_key = next((k for k in sections if "EXPERIENCE" in k), None)
+    # Experience HTML
+    exp_html = ""
+    exp_key = next((k for k in secs if "EXPERIENCE" in k), None)
     if exp_key:
-        L += [r"\section{Experience}", r"\resumeSubHeadingListStart"]
-        injected = 0
-        in_items = False
-        cur_company = ""
-        cur_date = ""
-        cur_title = ""
-        cur_loc = ""
-
-        for l in sections[exp_key]:
+        injected = 0; pending = None; pending_items = []
+        def flush_exp(p, items):
+            h = ("<div class=\"entry\">"
+                + "<div class=\"eh\"><span class=\"ed\">" + esc(p[1]) + "</span>"
+                + "<span class=\"et\">" + esc(p[0]) + "</span></div>"
+                + "<div><span class=\"er\">" + esc(p[2]) + "</span></div>")
+            if items:
+                h += "<ul>" + "".join("<li>" + esc(x) + "</li>" for x in items) + "</ul>"
+            h += "</div>"
+            return h
+        for l in secs[exp_key]:
             if not l: continue
             is_bul = l.startswith(("*","•","-","·"))
-            dm = re.search(r"(\w{3}\s*\d{4})\s*[-–]+\s*(\w{3}\s*\d{4}|Present|present)", l)
-
+            dm = re.search(r"((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4})\s*[-\u2013]+\s*((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|Present)\s*\d{0,4})", l)
             if is_bul:
-                if not in_items:
-                    L.append(r"  \resumeItemListStart")
-                    in_items = True
                 if injected < len(bullets):
-                    L.append(r"    \resumeItem{" + tex(bullets[injected]) + "}")
-                    injected += 1
+                    pending_items.append(bullets[injected]); injected += 1
                 else:
-                    L.append(r"    \resumeItem{" + tex(l.lstrip("*•-· ")) + "}")
+                    pending_items.append(l.lstrip("*•-· "))
             else:
-                if in_items:
-                    L.append(r"  \resumeItemListEnd")
-                    in_items = False
+                if pending:
+                    exp_html += flush_exp(pending, pending_items)
+                    pending_items = []
                 if dm:
-                    date_str = dm.group(0)
-                    rest = l.replace(date_str, "").strip(" -–")
-                    L.append(r"  \resumeSubheading{" + tex(rest) + "}{" + tex(date_str) + "}{}{}")
-                else:
-                    # sub-line like "Data Science Intern Chennai, India"
-                    L.append(r"  \resumeSubheading{" + tex(l) + "}{}{}{}")
+                    rest = l.replace(dm.group(0),"").strip(" -")
+                    pending = [rest, dm.group(0).strip(), "", ""]
+                elif pending:
+                    pending[2] = l
+        if pending:
+            exp_html += flush_exp(pending, pending_items)
 
-        if in_items:
-            L.append(r"  \resumeItemListEnd")
-        L.append(r"\resumeSubHeadingListEnd")
-
-    # Projects
-    proj_key = next((k for k in sections if "PROJECT" in k), None)
+    # Projects HTML
+    proj_html = ""
+    proj_key = next((k for k in secs if "PROJECT" in k), None)
     if proj_key:
-        L += [r"\section{Projects}", r"\resumeSubHeadingListStart"]
-        in_items = False
-        for l in sections[proj_key]:
+        cur_proj = None; cur_items = []
+        def flush_proj(p, items):
+            nm, tech = p
+            h = "<div class=\"entry\"><div class=\"proj-h\"><span class=\"proj-n\">" + esc(nm) + "</span>"
+            if tech: h += " <span class=\"proj-t\">| " + esc(tech) + "</span>"
+            h += "</div>"
+            if items: h += "<ul>" + "".join("<li>" + esc(x) + "</li>" for x in items) + "</ul>"
+            h += "</div>"
+            return h
+        for l in secs[proj_key]:
             if not l: continue
             if l.startswith(("*","•","-","·")):
-                if not in_items:
-                    L.append(r"  \resumeItemListStart")
-                    in_items = True
-                L.append(r"    \resumeItem{" + tex(l.lstrip("*•-· ")) + "}")
+                cur_items.append(l.lstrip("*•-· "))
             else:
-                if in_items:
-                    L.append(r"  \resumeItemListEnd")
-                    in_items = False
-                L.append(r"  \resumeProjectHeading{\textbf{" + tex(l) + "}}{}")
-        if in_items:
-            L.append(r"  \resumeItemListEnd")
-        L.append(r"\resumeSubHeadingListEnd")
+                if cur_proj is not None:
+                    proj_html += flush_proj(cur_proj, cur_items); cur_items = []
+                cur_proj = (l.split("|")[0].strip(), l.split("|")[1].strip()) if "|" in l else (l, "")
+        if cur_proj is not None:
+            proj_html += flush_proj(cur_proj, cur_items)
 
-    # Skills
-    if skills:
-        L += [r"\section{Technical Skills}", r"\resumeSubHeadingListStart",
-              r"  \item \small{\textbf{Aligned Skills}: " + tex(skills) + "}",
-              r"\resumeSubHeadingListEnd"]
+    CSS = """
+@page { size: letter; margin: 0.5in; }
+* { margin:0; padding:0; }
+body { font-family: Arial, sans-serif; font-size: 10pt; color: #111; line-height: 1.4; }
+.header { text-align:center; margin-bottom:8px; padding-bottom:6px; border-bottom:2px solid #111; }
+.name { font-size:16pt; font-weight:bold; letter-spacing:2px; }
+.contact { font-size:9pt; color:#444; margin-top:3px; }
+.tailored { font-size:8.5pt; color:#1E40AF; font-style:italic; margin-top:2px; }
+.sec-title { font-size:10pt; font-weight:bold; text-transform:uppercase; border-bottom:1px solid #111; padding-bottom:1px; margin-top:9px; margin-bottom:5px; }
+.entry { margin-bottom:5px; }
+.eh { overflow:hidden; }
+.et { font-weight:bold; font-size:10pt; }
+.ed { font-size:9pt; color:#444; float:right; }
+.er { font-style:italic; font-size:9.5pt; }
+ul { margin-left:14px; margin-top:2px; }
+li { font-size:9pt; margin-bottom:1px; }
+.proj-n { font-weight:bold; font-size:9.5pt; }
+.proj-t { font-style:italic; font-size:9pt; color:#333; }
+"""
 
-    L.append(r"\end{document}")
-    latex = "\n".join(L)
+    html = ("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><style>"
+        + CSS + "</style></head><body>"
+        + "<div class=\"header\">"
+        + "<div class=\"name\">" + esc(name_line) + "</div>"
+        + "<div class=\"contact\">" + esc(contact_line) + "</div>"
+        + "<div class=\"tailored\">Tailored for: <b>" + esc(job_title) + "</b> at " + esc(company) + "</div>"
+        + "</div>"
+        + ("<div class=\"sec-title\">Summary</div><p style=\"font-size:9.5pt\">" + esc(summary) + "</p>" if summary else "")
+        + ("<div class=\"sec-title\">Education</div>" + edu_html if edu_html else "")
+        + ("<div class=\"sec-title\">Experience</div>" + exp_html if exp_html else "")
+        + ("<div class=\"sec-title\">Projects</div>" + proj_html if proj_html else "")
+        + ("<div class=\"sec-title\">Technical Skills</div><p style=\"font-size:9.5pt\"><b>Aligned Skills:</b> " + esc(skills) + "</p>" if skills else "")
+        + "</body></html>")
 
     if fmt == "latex":
-        from flask import make_response
-        resp = make_response(latex)
-        resp.headers["Content-Type"] = "text/plain; charset=utf-8"
-        resp.headers["Content-Disposition"] = "attachment; filename=resume_tailored.tex"
+        resp = make_response(html.encode("utf-8"))
+        resp.headers["Content-Type"] = "text/html; charset=utf-8"
+        resp.headers["Content-Disposition"] = 'attachment; filename="resume_tailored.html"'
         return resp
 
-    # Compile PDF
     try:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tex_path = os.path.join(tmpdir, "resume.tex")
-            with open(tex_path, "w", encoding="utf-8") as f:
-                f.write(latex)
-            subprocess.run(
-                ["pdflatex", "-interaction=nonstopmode", "-output-directory", tmpdir, tex_path],
-                capture_output=True, timeout=30
-            )
-            pdf_path = os.path.join(tmpdir, "resume.pdf")
-            if os.path.exists(pdf_path):
-                with open(pdf_path, "rb") as f:
-                    pdf_bytes = f.read()
-                from flask import make_response
-                safe = job_title.replace(" ", "-").replace("/", "-")
-                resp = make_response(pdf_bytes)
-                resp.headers["Content-Type"] = "application/pdf"
-                resp.headers["Content-Disposition"] = f"attachment; filename=Resume_{safe}_Tailored.pdf"
-                return resp
-            else:
-                # fallback: send latex
-                from flask import make_response
-                resp = make_response(latex)
-                resp.headers["Content-Type"] = "text/plain; charset=utf-8"
-                resp.headers["Content-Disposition"] = "attachment; filename=resume_tailored.tex"
-                return resp
-    except Exception:
-        from flask import make_response
-        resp = make_response(latex)
-        resp.headers["Content-Type"] = "text/plain; charset=utf-8"
-        resp.headers["Content-Disposition"] = "attachment; filename=resume_tailored.tex"
+        from xhtml2pdf import pisa
+        buf = io.BytesIO()
+        result = pisa.CreatePDF(html, dest=buf)
+        if result.err:
+            raise Exception("xhtml2pdf error: " + str(result.err))
+        pdf_bytes = buf.getvalue()
+        safe = re.sub(r"[^\w\-]", "-", job_title)
+        resp = make_response(pdf_bytes)
+        resp.headers["Content-Type"] = "application/pdf"
+        resp.headers["Content-Disposition"] = 'attachment; filename="Resume-' + safe + '-Tailored.pdf"'
+        resp.headers["Content-Length"] = str(len(pdf_bytes))
         return resp
+    except Exception as e:
+        resp = make_response("PDF Error: " + str(e))
+        resp.headers["Content-Type"] = "text/plain"
+        return resp, 500
 
 
 @app.route("/")
