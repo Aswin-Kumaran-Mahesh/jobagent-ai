@@ -604,10 +604,10 @@ function handleEvent(event) {
     const map={filter_jobs:"filter",rank_jobs:"rank",tailor_resume:"tailor"};
     if (map[data.tool]) setPipe(map[data.tool],"active");
   }
-  else if (type==="reasoning") log("~ Agent reasoning...");
+  else if (type==="reasoning") { log("~ " + (data.text || "Agent reasoning..."), "muted"); }
   else if (type==="filter_result") {
     renderFilter(data); setPipe("filter","done");
-    log("+ Filtering done: "+data.passed_count+" passed", "ok");
+    log("+ Filtering done: "+data.passed_count+" passed, "+data.rejected_count+" rejected", "ok");
     switchTab("filter");
   }
   else if (type==="rank_result") {
