@@ -598,15 +598,19 @@ def generate_resume_pdf():
 """
 
     # Header
-    latex += f"""\\begin{{center}}
-    {{\\Huge \\scshape {tex(name_line)}}} \\\\ \\vspace{{1pt}}
-    \\small {tex(contact_line)} \\\\ \\vspace{{1pt}}
-    \\textit{{\\small Tailored for: {tex(job_title)} at {tex(company)}}}
-\\end{{center}}
-\\vspace{{-10pt}}
+    contact_tex = tex(contact_line).strip()
+    if contact_tex:
+        contact_row = f"    \\\\small {contact_tex} \\\\\\\\ \\\\vspace{{1pt}}\n"
+    else:
+        contact_row = ""
+    latex += f"""\\\\begin{{center}}
+    {{\\\\Huge \\\\scshape {tex(name_line)}}} \\\\\\\\ \\\\vspace{{1pt}}
+{contact_row}    \\\\textit{{\\\\small Tailored for: {tex(job_title)} at {tex(company)}}}
+\\\\end{{center}}
+\\\\vspace{{-10pt}}
 """
 
-    # Summary
+        # Summary
     latex += "\\section{Summary}\n"
     latex += f"\\resumeSubHeadingListStart\n\\item \\small{{{tex(tailored_summary)}}}\n\\resumeSubHeadingListEnd\n\n"
 
