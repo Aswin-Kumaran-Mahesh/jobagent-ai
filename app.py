@@ -481,6 +481,12 @@ def parse_csv():
 def generate_resume_pdf():
     import re, io
     from flask import make_response
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.units import inch
+    from reportlab.lib import colors
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
 
     data            = request.json
     tailored_output = data.get("tailored_output", "")
@@ -488,9 +494,6 @@ def generate_resume_pdf():
     job_title       = data.get("job_title", "")
     company         = data.get("company", "")
     fmt             = data.get("format", "pdf")
-
-    def esc(s):
-        return str(s).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
 
     def extract(text, marker):
         parts = re.split(r"-{2,}\s*[A-Z][A-Z ]*[A-Z]\s*-{2,}", text)
@@ -512,10 +515,7 @@ def generate_resume_pdf():
     raw = [l.strip() for l in original_resume.splitlines()
            if l.strip() and not l.strip().startswith("(cid:")]
     name_line    = raw[0] if raw else "Candidate"
-    contact_line = ""
-    for l in raw[1:5]:
-        if "@" in l or "linkedin" in l.lower() or "|" in l:
-            contact_line = l; break
+    contact_line = next((l for l in raw[1:5] if "@" in l or "linkedin" in l.lower() or "|" in l), "")
 
     SECS = ["EDUCATION","EXPERIENCE","PROJECT","SKILL","PUBLICATION","CERTIFICATION"]
     SKIP = {"SUMMARY","OBJECTIVE","PROFILE"}
@@ -529,10 +529,41 @@ def generate_resume_pdf():
         elif cur: cur_l.append(line)
     if cur: secs[cur] = cur_l
 
-    # Education HTML
-    edu_html = ""
+    # Styles
+    BLUE  = colors.HexColor("#1E40AF")
+    DARK  = colors.HexColor("#111111")
+    GRAY  = colors.HexColor("#555555")
+    TEAL  = colors.HexColor("#0D9488")
+
+    def S(name, **kw): return ParagraphStyle(name, **kw)
+    name_s    = S("N", fontSize=16, fontName="Helvetica-Bold", textColor=DARK, alignment=TA_CENTER, spaceAfter=2)
+    contact_s = S("C", fontSize=8.5, fontName="Helvetica", textColor=GRAY, alignment=TA_CENTER, spaceAfter=2)
+    badge_s   = S("B", fontSize=8, fontName="Helvetica-Oblique", textColor=TEAL, alignment=TA_CENTER, spaceAfter=4)
+    sec_s     = S("H", fontSize=10, fontName="Helvetica-Bold", textColor=BLUE, spaceBefore=8, spaceAfter=2)
+    body_s    = S("P", fontSize=9, fontName="Helvetica", textColor=DARK, spaceAfter=2, leading=13)
+    bold_s    = S("Pb", fontSize=9, fontName="Helvetica-Bold", textColor=DARK, spaceAfter=1)
+    italic_s  = S("Pi", fontSize=8.5, fontName="Helvetica-Oblique", textColor=GRAY, spaceAfter=1)
+    bullet_s  = S("L", fontSize=9, fontName="Helvetica", textColor=DARK, spaceAfter=1, leading=12, leftIndent=12, bulletIndent=0)
+
+    def HR(): return HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#CCCCCC"), spaceAfter=3, spaceBefore=1)
+
+    story = []
+    story.append(Paragraph(name_line, name_s))
+    if contact_line:
+        story.append(Paragraph(contact_line, contact_s))
+    story.append(Paragraph(f"Tailored for: <b>{job_title}</b> at {company}", badge_s))
+    story.append(HR())
+
+    if summary:
+        story.append(Paragraph("PROFESSIONAL SUMMARY", sec_s))
+        story.append(HR())
+        story.append(Paragraph(summary, body_s))
+
+    # Education
     edu_key = next((k for k in secs if "EDUCATION" in k), None)
     if edu_key:
+        story.append(Paragraph("EDUCATION", sec_s))
+        story.append(HR())
         edu_lines = secs[edu_key]; i = 0
         while i < len(edu_lines):
             l = edu_lines[i]
@@ -543,129 +574,75 @@ def generate_resume_pdf():
                 inst = l.replace(date_str,"").strip(" -") if date_str else l
                 nxt = edu_lines[i+1] if i+1 < len(edu_lines) else ""
                 degree = nxt if nxt and not any(x in nxt.upper() for x in ["UNIVERSITY","COLLEGE"]) else ""
-                edu_html += ("<div class=\"entry\">"
-                    + "<div class=\"eh\"><span class=\"ed\">" + esc(date_str) + "</span>"
-                    + "<span class=\"et\">" + esc(inst) + "</span></div>"
-                    + "<div><span class=\"er\">" + esc(degree) + "</span></div></div>")
+                story.append(Paragraph(f"<b>{inst}</b>  <font color='#555555' size='8'>{date_str}</font>", body_s))
+                if degree: story.append(Paragraph(degree, italic_s))
                 i += 2 if degree else 1
-            else: i += 1
+            else: i+=1
 
-    # Experience HTML
-    exp_html = ""
+    # Experience
     exp_key = next((k for k in secs if "EXPERIENCE" in k), None)
     if exp_key:
-        injected = 0; pending = None; pending_items = []
-        def flush_exp(p, items):
-            h = ("<div class=\"entry\">"
-                + "<div class=\"eh\"><span class=\"ed\">" + esc(p[1]) + "</span>"
-                + "<span class=\"et\">" + esc(p[0]) + "</span></div>"
-                + "<div><span class=\"er\">" + esc(p[2]) + "</span></div>")
-            if items:
-                h += "<ul>" + "".join("<li>" + esc(x) + "</li>" for x in items) + "</ul>"
-            h += "</div>"
-            return h
+        story.append(Paragraph("EXPERIENCE", sec_s))
+        story.append(HR())
+        injected = 0; pending = None; pending_role = ""
         for l in secs[exp_key]:
             if not l: continue
             is_bul = l.startswith(("*","•","-","·"))
             dm = re.search(r"((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4})\s*[-\u2013]+\s*((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|Present)\s*\d{0,4})", l)
             if is_bul:
-                if injected < len(bullets):
-                    pending_items.append(bullets[injected]); injected += 1
-                else:
-                    pending_items.append(l.lstrip("*•-· "))
+                txt = bullets[injected] if injected < len(bullets) else l.lstrip("*•-· ")
+                if injected < len(bullets): injected += 1
+                story.append(Paragraph(f"• {txt}", bullet_s))
+            elif dm:
+                rest = l.replace(dm.group(0),"").strip(" -")
+                story.append(Paragraph(f"<b>{rest}</b>  <font color='#555555' size='8'>{dm.group(0).strip()}</font>", body_s))
+                pending = rest
+            elif pending:
+                story.append(Paragraph(l, italic_s))
+                pending = None
             else:
-                if pending:
-                    exp_html += flush_exp(pending, pending_items)
-                    pending_items = []
-                if dm:
-                    rest = l.replace(dm.group(0),"").strip(" -")
-                    pending = [rest, dm.group(0).strip(), "", ""]
-                elif pending:
-                    pending[2] = l
-        if pending:
-            exp_html += flush_exp(pending, pending_items)
+                story.append(Paragraph(f"<b>{l}</b>", bold_s))
 
-    # Projects HTML
-    proj_html = ""
+    # Projects
     proj_key = next((k for k in secs if "PROJECT" in k), None)
     if proj_key:
-        cur_proj = None; cur_items = []
-        def flush_proj(p, items):
-            nm, tech = p
-            h = "<div class=\"entry\"><div class=\"proj-h\"><span class=\"proj-n\">" + esc(nm) + "</span>"
-            if tech: h += " <span class=\"proj-t\">| " + esc(tech) + "</span>"
-            h += "</div>"
-            if items: h += "<ul>" + "".join("<li>" + esc(x) + "</li>" for x in items) + "</ul>"
-            h += "</div>"
-            return h
+        story.append(Paragraph("PROJECTS", sec_s))
+        story.append(HR())
         for l in secs[proj_key]:
             if not l: continue
             if l.startswith(("*","•","-","·")):
-                cur_items.append(l.lstrip("*•-· "))
+                story.append(Paragraph(f"• {l.lstrip('*•-· ')}", bullet_s))
+            elif "|" in l:
+                nm, tech = l.split("|",1)
+                story.append(Paragraph(f"<b>{nm.strip()}</b>  <font color='#555555' size='8'><i>{tech.strip()}</i></font>", body_s))
             else:
-                if cur_proj is not None:
-                    proj_html += flush_proj(cur_proj, cur_items); cur_items = []
-                cur_proj = (l.split("|")[0].strip(), l.split("|")[1].strip()) if "|" in l else (l, "")
-        if cur_proj is not None:
-            proj_html += flush_proj(cur_proj, cur_items)
+                story.append(Paragraph(f"<b>{l}</b>", bold_s))
 
-    CSS = """
-@page { size: letter; margin: 0.5in; }
-* { margin:0; padding:0; }
-body { font-family: Arial, sans-serif; font-size: 10pt; color: #111; line-height: 1.4; }
-.header { text-align:center; margin-bottom:8px; padding-bottom:6px; border-bottom:2px solid #111; }
-.name { font-size:16pt; font-weight:bold; letter-spacing:2px; }
-.contact { font-size:9pt; color:#444; margin-top:3px; }
-.tailored { font-size:8.5pt; color:#1E40AF; font-style:italic; margin-top:2px; }
-.sec-title { font-size:10pt; font-weight:bold; text-transform:uppercase; border-bottom:1px solid #111; padding-bottom:1px; margin-top:9px; margin-bottom:5px; }
-.entry { margin-bottom:5px; }
-.eh { overflow:hidden; }
-.et { font-weight:bold; font-size:10pt; }
-.ed { font-size:9pt; color:#444; float:right; }
-.er { font-style:italic; font-size:9.5pt; }
-ul { margin-left:14px; margin-top:2px; }
-li { font-size:9pt; margin-bottom:1px; }
-.proj-n { font-weight:bold; font-size:9.5pt; }
-.proj-t { font-style:italic; font-size:9pt; color:#333; }
-"""
+    if skills:
+        story.append(Paragraph("TECHNICAL SKILLS", sec_s))
+        story.append(HR())
+        story.append(Paragraph(f"<b>Aligned Skills:</b> {skills}", body_s))
 
-    html = ("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><style>"
-        + CSS + "</style></head><body>"
-        + "<div class=\"header\">"
-        + "<div class=\"name\">" + esc(name_line) + "</div>"
-        + "<div class=\"contact\">" + esc(contact_line) + "</div>"
-        + "<div class=\"tailored\">Tailored for: <b>" + esc(job_title) + "</b> at " + esc(company) + "</div>"
-        + "</div>"
-        + ("<div class=\"sec-title\">Summary</div><p style=\"font-size:9.5pt\">" + esc(summary) + "</p>" if summary else "")
-        + ("<div class=\"sec-title\">Education</div>" + edu_html if edu_html else "")
-        + ("<div class=\"sec-title\">Experience</div>" + exp_html if exp_html else "")
-        + ("<div class=\"sec-title\">Projects</div>" + proj_html if proj_html else "")
-        + ("<div class=\"sec-title\">Technical Skills</div><p style=\"font-size:9.5pt\"><b>Aligned Skills:</b> " + esc(skills) + "</p>" if skills else "")
-        + "</body></html>")
-
+    # Return latex source as HTML if requested
     if fmt == "latex":
-        resp = make_response(html.encode("utf-8"))
+        html_src = "<html><body><pre>" + tailored_output + "</pre></body></html>"
+        resp = make_response(html_src.encode("utf-8"))
         resp.headers["Content-Type"] = "text/html; charset=utf-8"
         resp.headers["Content-Disposition"] = 'attachment; filename="resume_tailored.html"'
         return resp
 
-    try:
-        from xhtml2pdf import pisa
-        buf = io.BytesIO()
-        result = pisa.CreatePDF(html, dest=buf)
-        if result.err:
-            raise Exception("xhtml2pdf error: " + str(result.err))
-        pdf_bytes = buf.getvalue()
-        safe = re.sub(r"[^\w\-]", "-", job_title)
-        resp = make_response(pdf_bytes)
-        resp.headers["Content-Type"] = "application/pdf"
-        resp.headers["Content-Disposition"] = 'attachment; filename="Resume-' + safe + '-Tailored.pdf"'
-        resp.headers["Content-Length"] = str(len(pdf_bytes))
-        return resp
-    except Exception as e:
-        resp = make_response("PDF Error: " + str(e))
-        resp.headers["Content-Type"] = "text/plain"
-        return resp, 500
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=letter,
+                            leftMargin=0.6*inch, rightMargin=0.6*inch,
+                            topMargin=0.5*inch, bottomMargin=0.5*inch)
+    doc.build(story)
+    pdf_bytes = buf.getvalue()
+    safe = re.sub(r"[^\w\-]", "-", job_title)
+    resp = make_response(pdf_bytes)
+    resp.headers["Content-Type"] = "application/pdf"
+    resp.headers["Content-Disposition"] = f'attachment; filename="Resume-{safe}-Tailored.pdf"'
+    resp.headers["Content-Length"] = str(len(pdf_bytes))
+    return resp
 
 
 @app.route("/")
