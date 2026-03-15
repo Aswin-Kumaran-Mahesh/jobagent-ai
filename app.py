@@ -623,12 +623,132 @@ def generate_resume_pdf():
         story.append(HR())
         story.append(Paragraph(f"<b>Aligned Skills:</b> {skills}", body_s))
 
-    # Return latex source as HTML if requested
+    # Generate real LaTeX if requested
     if fmt == "latex":
-        html_src = "<html><body><pre>" + tailored_output + "</pre></body></html>"
-        resp = make_response(html_src.encode("utf-8"))
-        resp.headers["Content-Type"] = "text/html; charset=utf-8"
-        resp.headers["Content-Disposition"] = 'attachment; filename="resume_tailored.html"'
+        def tex(s):
+            s = str(s)
+            for a, b in [("\\\\","BKSL"),("&",r"\&"),("%",r"\%"),("$",r"\$"),
+                         ("#",r"\#"),("_",r"\_"),("{",r"\{"),("}",r"\}"),
+                         ("~",r"\textasciitilde{}"),("^",r"\textasciicircum{}"),
+                         ("BKSL",r"\textbackslash{}")]:
+                s = s.replace(a, b)
+            return s
+
+        L = [
+            r"\documentclass[letterpaper,11pt]{article}",
+            r"\usepackage[left=0.5in,right=0.5in,top=0.5in,bottom=0.5in]{geometry}",
+            r"\usepackage{latexsym,titlesec,enumitem,hyperref,fancyhdr,tabularx}",
+            r"\usepackage[usenames,dvipsnames]{color}",
+            r"\usepackage[T1]{fontenc}",
+            r"\usepackage[utf8]{inputenc}",
+            r"\input{glyphtounicode}",
+            r"\hypersetup{colorlinks=false}",
+            r"\pagestyle{fancy}\fancyhf{}\fancyfoot{}",
+            r"\renewcommand{\headrulewidth}{0pt}\renewcommand{\footrulewidth}{0pt}",
+            r"\raggedbottom\raggedright\setlength{\tabcolsep}{0in}",
+            r"\titleformat{\section}{\vspace{-4pt}\scshape\raggedright\large}{}{0em}{}[\color{black}\titlerule\vspace{-5pt}]",
+            r"\pdfgentounicode=1",
+            r"\newcommand{\resumeItem}[1]{\item\small{#1\vspace{-2pt}}}",
+            r"\newcommand{\resumeSubheading}[4]{",
+            r"  \vspace{-2pt}\item\begin{tabular*}{0.97\textwidth}[t]{l@{\extracolsep{\fill}}r}",
+            r"    \textbf{#1} & #2 \\ \textit{\small#3} & \textit{\small#4} \\",
+            r"  \end{tabular*}\vspace{-7pt}}",
+            r"\newcommand{\resumeProjectHeading}[2]{",
+            r"  \item\begin{tabular*}{0.97\textwidth}{l@{\extracolsep{\fill}}r}",
+            r"    \small#1 & #2 \\ \end{tabular*}\vspace{-7pt}}",
+            r"\newcommand{\resumeSubHeadingListStart}{\begin{itemize}[leftmargin=0.15in,label={}]}",
+            r"\newcommand{\resumeSubHeadingListEnd}{\end{itemize}}",
+            r"\newcommand{\resumeItemListStart}{\begin{itemize}}",
+            r"\newcommand{\resumeItemListEnd}{\end{itemize}\vspace{-5pt}}",
+            r"\begin{document}",
+            r"\begin{center}",
+            r"  {\Huge\scshape " + tex(name_line) + r"}\vspace{4pt}\\",
+        ]
+        if contact_line.strip():
+            L.append(r"  \small " + tex(contact_line) + r"\vspace{2pt}\\")
+        L += [
+            r"  \textit{\small Tailored for: \textbf{" + tex(job_title) + "} at " + tex(company) + "}",
+            r"\end{center}\vspace{-10pt}",
+        ]
+        if summary:
+            L += [r"\section{Summary}", r"\resumeSubHeadingListStart",
+                  r"  \item\small{" + tex(summary) + "}", r"\resumeSubHeadingListEnd"]
+
+        edu_key2 = next((k for k in secs if "EDUCATION" in k), None)
+        if edu_key2:
+            L += [r"\section{Education}", r"\resumeSubHeadingListStart"]
+            edu_l = secs[edu_key2]; i2 = 0
+            while i2 < len(edu_l):
+                l2 = edu_l[i2]
+                if not l2: i2+=1; continue
+                dm2 = re.search(r"((?:\w+ )?\d{4})\s*[-\u2013]+\s*((?:\w+ )?\d{0,4})", l2)
+                if any(x in l2 for x in ["University","College","Institute","School"]):
+                    ds = dm2.group(0).strip() if dm2 else ""
+                    inst2 = l2.replace(ds,"").strip(" -") if ds else l2
+                    nxt2 = edu_l[i2+1] if i2+1 < len(edu_l) else ""
+                    deg = nxt2 if nxt2 and not any(x in nxt2.upper() for x in ["UNIVERSITY","COLLEGE"]) else ""
+                    L.append(r"  \resumeSubheading{" + tex(inst2) + "}{" + tex(ds) + "}{" + tex(deg) + "}{}")
+                    i2 += 2 if deg else 1
+                else: i2 += 1
+            L.append(r"\resumeSubHeadingListEnd")
+
+        exp_key2 = next((k for k in secs if "EXPERIENCE" in k), None)
+        if exp_key2:
+            L += [r"\section{Experience}", r"\resumeSubHeadingListStart"]
+            inj2 = 0; pend2 = None; in_items2 = False
+            for l2 in secs[exp_key2]:
+                if not l2: continue
+                is_b = l2.startswith(("*","•","-","·"))
+                dm2 = re.search(r"((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4})\s*[-\u2013]+\s*((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|Present)\s*\d{0,4})", l2)
+                if is_b:
+                    if pend2:
+                        L.append(r"  \resumeSubheading{"+tex(pend2[0])+"}{"+tex(pend2[1])+"}{"+tex(pend2[2])+"}{}")
+                        pend2 = None
+                    if not in_items2: L.append(r"  \resumeItemListStart"); in_items2 = True
+                    txt2 = bullets[inj2] if inj2 < len(bullets) else l2.lstrip("*•-· ")
+                    if inj2 < len(bullets): inj2 += 1
+                    L.append(r"    \resumeItem{" + tex(txt2) + "}")
+                else:
+                    if in_items2: L.append(r"  \resumeItemListEnd"); in_items2 = False
+                    if dm2:
+                        rest2 = l2.replace(dm2.group(0),"").strip(" -")
+                        pend2 = [rest2, dm2.group(0).strip(), ""]
+                    elif pend2:
+                        pend2[2] = l2
+                        L.append(r"  \resumeSubheading{"+tex(pend2[0])+"}{"+tex(pend2[1])+"}{"+tex(pend2[2])+"}{}")
+                        pend2 = None
+            if pend2: L.append(r"  \resumeSubheading{"+tex(pend2[0])+"}{"+tex(pend2[1])+"}{"+tex(pend2[2])+"}{}")
+            if in_items2: L.append(r"  \resumeItemListEnd")
+            L.append(r"\resumeSubHeadingListEnd")
+
+        proj_key2 = next((k for k in secs if "PROJECT" in k), None)
+        if proj_key2:
+            L += [r"\section{Projects}", r"\resumeSubHeadingListStart"]
+            in_items2 = False
+            for l2 in secs[proj_key2]:
+                if not l2: continue
+                if l2.startswith(("*","•","-","·")):
+                    if not in_items2: L.append(r"  \resumeItemListStart"); in_items2 = True
+                    L.append(r"    \resumeItem{" + tex(l2.lstrip("*•-· ")) + "}")
+                else:
+                    if in_items2: L.append(r"  \resumeItemListEnd"); in_items2 = False
+                    if "|" in l2:
+                        nm2, tech2 = l2.split("|",1)
+                        L.append(r"  \resumeProjectHeading{\textbf{" + tex(nm2.strip()) + r"} $|$ \emph{\small " + tex(tech2.strip()) + "}}{}")
+                    else:
+                        L.append(r"  \resumeProjectHeading{\textbf{" + tex(l2) + "}}{}")
+            if in_items2: L.append(r"  \resumeItemListEnd")
+            L.append(r"\resumeSubHeadingListEnd")
+
+        if skills:
+            L += [r"\section{Technical Skills}", r"\resumeSubHeadingListStart",
+                  r"  \item\small{\textbf{Aligned Skills}: " + tex(skills) + "}", r"\resumeSubHeadingListEnd"]
+
+        L.append(r"\end{document}")
+        latex_src = "\n".join(L)
+        resp = make_response(latex_src.encode("utf-8"))
+        resp.headers["Content-Type"] = "text/plain; charset=utf-8"
+        resp.headers["Content-Disposition"] = 'attachment; filename="resume_tailored.tex"'
         return resp
 
     buf = io.BytesIO()
