@@ -481,235 +481,220 @@ def parse_csv():
 def generate_resume_pdf():
     import io, re, os, subprocess, tempfile
 
-    data = request.json
+    data            = request.json
     tailored_output = data.get("tailored_output", "")
     original_resume = data.get("resume", "")
     job_title       = data.get("job_title", "")
     company         = data.get("company", "")
-    fmt             = data.get("format", "pdf")  # "pdf" or "latex"
+    fmt             = data.get("format", "pdf")
 
-    def extract_section(text, marker):
-        # Match --- MARKER --- and capture until next --- or end
-        pattern = rf"---+\s*{re.escape(marker)}\s*---+\s*\n([\s\S]*?)(?=\n---+\s*[A-Z]|$)"
-        m = re.search(pattern, text, re.IGNORECASE)
-        if m:
-            return m.group(1).strip()
-        # Fallback: simpler split approach
-        parts = re.split(r"---+[^-]+---+", text)
-        markers = re.findall(r"---+([^-]+)---+", text)
-        for i, mk in enumerate(markers):
-            if marker.lower() in mk.lower() and i+1 < len(parts):
-                return parts[i+1].strip()
-        return ""
-
-    tailored_summary = extract_section(tailored_output, "TAILORED PROFESSIONAL SUMMARY")
-    bullets_raw      = extract_section(tailored_output, "2 MODIFIED EXPERIENCE BULLETS")
-    aligned_skills   = extract_section(tailored_output, "HIGHLIGHTED ALIGNED SKILLS")
-
-    # Clean summary — remove any bullet contamination
-    tailored_summary = re.sub(r"---.*$", "", tailored_summary, flags=re.MULTILINE).strip()
-    tailored_summary = re.sub(r"[*•]\s+.*", "", tailored_summary, flags=re.MULTILINE).strip()
-
-    bullet_lines     = [l.strip().lstrip("*•-").strip()
-                        for l in bullets_raw.split("\n")
-                        if l.strip().startswith(("*","•","-"))]
-
-    # ── Parse original resume ─────────────────────────────────────────────
-    orig_lines = [l.strip() for l in original_resume.split("\n")
-                  if l.strip() and not l.strip().startswith("(cid:")]
-
-    name_line    = orig_lines[0] if orig_lines else "Candidate"
-    contact_line = ""
-    for l in orig_lines[1:5]:
-        if "@" in l or "linkedin" in l.lower() or "|" in l:
-            contact_line = l; break
-
-    sections = {}
-    current_section = None
-    current_lines   = []
-    SKIP = ["SUMMARY","OBJECTIVE","PROFILE"]
-    SECS = ["EDUCATION","EXPERIENCE","PROJECT","SKILL","PUBLICATION","CERTIFICATION"]
-
-    for line in orig_lines:
-        if any(kw in line.upper() for kw in SKIP): continue
-        is_sec = any(kw in line.upper() for kw in SECS) and len(line) < 40
-        if is_sec:
-            if current_section: sections[current_section] = current_lines
-            current_section = line.strip().upper(); current_lines = []
-        elif current_section:
-            current_lines.append(line)
-    if current_section:
-        sections[current_section] = current_lines
-
-    def tex_escape(s):
-        replacements = [("&","\\&"),("%","\\%"),("$","\\$"),("#","\\#"),
-                        ("_","\\_"),("{","\\{"),("}","\\}"),("~","\\textasciitilde{}"),
-                        ("^","\\textasciicircum{}"),("\\","\\textbackslash{}")]
-        for old, new in replacements:
+    # ── helpers ──────────────────────────────────────────────────────────
+    def tex(s):
+        s = str(s)
+        for old, new in [
+            ("\\", "BACKSLASH_PLACEHOLDER"),
+            ("&",  "\\&"), ("%", "\\%"), ("$", "\\$"),
+            ("#",  "\\#"), ("_", "\\_"), ("{", "\\{"),
+            ("}",  "\\}"), ("~", "\\textasciitilde{}"),
+            ("^",  "\\textasciicircum{}"),
+            ("BACKSLASH_PLACEHOLDER", "\\textbackslash{}"),
+        ]:
             s = s.replace(old, new)
         return s
 
-    def tex(s): return tex_escape(str(s))
+    def extract(text, marker):
+        parts = re.split(r"-{2,}\s*[A-Z][A-Z ]*[A-Z]\s*-{2,}", text)
+        headers = re.findall(r"-{2,}\s*([A-Z][A-Z ]*[A-Z])\s*-{2,}", text)
+        for i, h in enumerate(headers):
+            if marker.upper() in h.upper() and i + 1 < len(parts):
+                return parts[i + 1].strip()
+        return ""
 
-    # ── Build LaTeX (Jake's Resume style) ───────────────────────────────
-    latex = r"""\documentclass[letterpaper,10pt]{article}
-\usepackage[left=0.5in,right=0.5in,top=0.4in,bottom=0.4in]{geometry}
-\usepackage{latexsym}
-\usepackage{titlesec}
-\usepackage{marvosym}
-\usepackage[usenames,dvipsnames]{color}
-\usepackage{enumitem}
-\usepackage{hyperref}
-\usepackage{fancyhdr}
-\usepackage{tabularx}
-\usepackage{fontenc}
-\usepackage{inputenc}
-\input{glyphtounicode}
-\hypersetup{colorlinks=false}
-\pagestyle{fancy}
-\fancyhf{}
-\fancyfoot{}
-\renewcommand{\headrulewidth}{0pt}
-\renewcommand{\footrulewidth}{0pt}
-\raggedbottom
-\raggedright
-\setlength{\tabcolsep}{0in}
-\titleformat{\section}{\vspace{-4pt}\scshape\raggedright\large}{}{0em}{}[\color{black}\titlerule \vspace{-5pt}]
-\pdfgentounicode=1
-\newcommand{\resumeItem}[1]{\item\small{#1 \vspace{-2pt}}}
-\newcommand{\resumeSubheading}[4]{
-  \vspace{-2pt}\item
-  \begin{tabular*}{0.97\textwidth}[t]{l@{\extracolsep{\fill}}r}
-    \textbf{#1} & #2 \\
-    \textit{\small#3} & \textit{\small #4} \\
-  \end{tabular*}\vspace{-7pt}
-}
-\newcommand{\resumeProjectHeading}[2]{
-  \item
-  \begin{tabular*}{0.97\textwidth}{l@{\extracolsep{\fill}}r}
-    \small#1 & #2 \\
-  \end{tabular*}\vspace{-7pt}
-}
-\newcommand{\resumeSubHeadingListStart}{\begin{itemize}[leftmargin=0.15in, label={}]}
-\newcommand{\resumeSubHeadingListEnd}{\end{itemize}}
-\newcommand{\resumeItemListStart}{\begin{itemize}}
-\newcommand{\resumeItemListEnd}{\end{itemize}\vspace{-5pt}}
-\begin{document}
-"""
+    summary  = extract(tailored_output, "TAILORED PROFESSIONAL SUMMARY")
+    bul_raw  = extract(tailored_output, "MODIFIED EXPERIENCE BULLETS")
+    skills   = extract(tailored_output, "HIGHLIGHTED ALIGNED SKILLS")
+
+    # Clean summary — strip any stray bullet lines
+    summary  = re.sub(r"(?m)^[*•\-].*$", "", summary).strip()
+    summary  = re.sub(r"\s+", " ", summary).strip()
+
+    bullets  = [l.strip().lstrip("*•- ").strip()
+                for l in bul_raw.splitlines()
+                if l.strip().startswith(("*", "•", "-"))]
+
+    # ── parse resume ─────────────────────────────────────────────────────
+    lines = [l.strip() for l in original_resume.splitlines()
+             if l.strip() and not l.strip().startswith("(cid:")]
+
+    name_line    = lines[0] if lines else "Candidate"
+    contact_line = ""
+    for l in lines[1:5]:
+        if "@" in l or "linkedin" in l.lower() or "|" in l:
+            contact_line = l
+            break
+
+    SKIP = {"SUMMARY", "OBJECTIVE", "PROFILE"}
+    SECS = ["EDUCATION", "EXPERIENCE", "PROJECT", "SKILL", "PUBLICATION", "CERTIFICATION"]
+    sections, cur_sec, cur_lines = {}, None, []
+    for line in lines:
+        upper = line.upper()
+        if any(kw in upper for kw in SKIP):
+            continue
+        if any(kw in upper for kw in SECS) and len(line) < 45:
+            if cur_sec:
+                sections[cur_sec] = cur_lines
+            cur_sec, cur_lines = upper, []
+        elif cur_sec:
+            cur_lines.append(line)
+    if cur_sec:
+        sections[cur_sec] = cur_lines
+
+    # ── build LaTeX using list of strings ────────────────────────────────
+    L = []
+
+    def add(*args):
+        for a in args:
+            L.append(a)
+
+    add(
+        r"\documentclass[letterpaper,10pt]{article}",
+        r"\usepackage[left=0.55in,right=0.55in,top=0.45in,bottom=0.45in]{geometry}",
+        r"\usepackage{latexsym,titlesec,enumitem,hyperref,fancyhdr,tabularx}",
+        r"\usepackage[usenames,dvipsnames]{color}",
+        r"\usepackage[T1]{fontenc}",
+        r"\usepackage[utf8]{inputenc}",
+        r"\input{glyphtounicode}",
+        r"\hypersetup{colorlinks=false}",
+        r"\pagestyle{fancy}\fancyhf{}\fancyfoot{}",
+        r"\renewcommand{\headrulewidth}{0pt}",
+        r"\renewcommand{\footrulewidth}{0pt}",
+        r"\raggedbottom\raggedright",
+        r"\setlength{\tabcolsep}{0in}",
+        r"\titleformat{\section}{\vspace{-4pt}\scshape\raggedright\large}{}{0em}{}[\color{black}\titlerule\vspace{-5pt}]",
+        r"\pdfgentounicode=1",
+        r"\newcommand{\resumeItem}[1]{\item\small{#1\vspace{-2pt}}}",
+        r"\newcommand{\resumeSubheading}[4]{\vspace{-2pt}\item",
+        r"  \begin{tabular*}{0.97\textwidth}[t]{l@{\extracolsep{\fill}}r}",
+        r"    \textbf{#1} & #2 \\",
+        r"    \textit{\small#3} & \textit{\small#4} \\",
+        r"  \end{tabular*}\vspace{-7pt}}",
+        r"\newcommand{\resumeProjectHeading}[2]{\item",
+        r"  \begin{tabular*}{0.97\textwidth}{l@{\extracolsep{\fill}}r}",
+        r"    \small#1 & #2 \\",
+        r"  \end{tabular*}\vspace{-7pt}}",
+        r"\newcommand{\resumeSubHeadingListStart}{\begin{itemize}[leftmargin=0.15in,label={}]}",
+        r"\newcommand{\resumeSubHeadingListEnd}{\end{itemize}}",
+        r"\newcommand{\resumeItemListStart}{\begin{itemize}}",
+        r"\newcommand{\resumeItemListEnd}{\end{itemize}\vspace{-5pt}}",
+        r"\begin{document}",
+    )
 
     # Header
-    contact_tex = tex(contact_line).strip()
-    if contact_tex:
-        contact_row = f"    \\\\small {contact_tex} \\\\\\\\ \\\\vspace{{1pt}}\n"
-    else:
-        contact_row = ""
-    latex += f"""\\\\begin{{center}}
-    {{\\\\Huge \\\\scshape {tex(name_line)}}} \\\\\\\\ \\\\vspace{{1pt}}
-{contact_row}    \\\\textit{{\\\\small Tailored for: {tex(job_title)} at {tex(company)}}}
-\\\\end{{center}}
-\\\\vspace{{-10pt}}
-"""
+    add(r"\begin{center}")
+    add(f"  {{\\Huge \\scshape {tex(name_line)}}}")
+    if contact_line.strip():
+        add(f"  \\\\[1pt] \\small {tex(contact_line)}")
+    add(f"  \\\\[1pt] \\textit{{\\small Tailored for: {tex(job_title)} at {tex(company)}}}")
+    add(r"\end{center}", r"\vspace{-8pt}")
 
-        # Summary
-    latex += "\\section{Summary}\n"
-    latex += f"\\resumeSubHeadingListStart\n\\item \\small{{{tex(tailored_summary)}}}\n\\resumeSubHeadingListEnd\n\n"
+    # Summary
+    if summary:
+        add(r"\section{Summary}", r"\resumeSubHeadingListStart")
+        add(f"  \\item \\small{{{tex(summary)}}}")
+        add(r"\resumeSubHeadingListEnd")
 
     # Education
     edu_key = next((k for k in sections if "EDUCATION" in k), None)
     if edu_key:
-        latex += "\\section{Education}\n\\resumeSubHeadingListStart\n"
+        add(r"\section{Education}", r"\resumeSubHeadingListStart")
         edu_lines = sections[edu_key]
         i = 0
         while i < len(edu_lines):
             l = edu_lines[i]
             if not l:
                 i += 1; continue
-            # Try to pair institution+date and degree+gpa
-            next_l = edu_lines[i+1] if i+1 < len(edu_lines) else ""
-            if any(x in l for x in ["University","College","Institute"]):
-                # Extract year range if present
-                import re as re2
-                date_m = re2.search(r'(\w+ \d{4})\s*[-–]\s*(\w+ \d{4}|\w+ \d{4})', l)
-                date_str = date_m.group(0) if date_m else ""
-                inst = re2.sub(r'\s*' + re2.escape(date_str), '', l).strip() if date_str else l
-                degree = next_l if next_l else ""
-                latex += f"  \\resumeSubheading{{{tex(inst)}}}{{{tex(date_str)}}}{{{tex(degree)}}}{{}}\n"
-                i += 2
+            nxt = edu_lines[i+1] if i+1 < len(edu_lines) else ""
+            dm = re.search(r"(\w[\w\s]*\d{4})\s*[–-]+\s*(\w[\w\s]*\d{4})", l)
+            if any(x in l for x in ["University","College","Institute","School"]):
+                date_str = dm.group(0) if dm else ""
+                inst = l.replace(date_str,"").strip(" –-") if date_str else l
+                degree = nxt if nxt and not any(x in nxt.upper() for x in ["UNIVERSITY","COLLEGE"]) else ""
+                add(f"  \\resumeSubheading{{{tex(inst)}}}{{{tex(date_str)}}}{{{tex(degree)}}}{{}}")
+                i += 2 if degree else 1
             else:
                 i += 1
-        latex += "\\resumeSubHeadingListEnd\n\n"
+        add(r"\resumeSubHeadingListEnd")
 
     # Experience
     exp_key = next((k for k in sections if "EXPERIENCE" in k), None)
     if exp_key:
-        latex += "\\section{Experience}\n\\resumeSubHeadingListStart\n"
-        exp_lines = sections[exp_key]
+        add(r"\section{Experience}", r"\resumeSubHeadingListStart")
         injected = 0
         in_items = False
-        for l in exp_lines:
+        for l in sections[exp_key]:
             if not l: continue
             is_bul = l.startswith(("*","•","-","·"))
+            dm = re.search(r"(\w{3}\s*\d{4})\s*[–-]+\s*(\w{3}\s*\d{4}|Present|present)", l)
             if is_bul:
                 if not in_items:
-                    latex += "  \\resumeItemListStart\n"
+                    add(r"  \resumeItemListStart")
                     in_items = True
-                if injected < len(bullet_lines):
-                    latex += f"    \\resumeItem{{{tex(bullet_lines[injected])}}}\n"
+                if injected < len(bullets):
+                    add(f"    \\resumeItem{{{tex(bullets[injected])}}}")
                     injected += 1
                 else:
-                    latex += f"    \\resumeItem{{{tex(l.lstrip('*•-· ').strip())}}}\n"
+                    add(f"    \\resumeItem{{{tex(l.lstrip('*•-· '))}}}")
             else:
                 if in_items:
-                    latex += "  \\resumeItemListEnd\n"
+                    add(r"  \resumeItemListEnd")
                     in_items = False
-                # Check if it looks like a job title line
-                import re as re2
-                date_m = re2.search(r'(\w{3} \d{4})\s*[-–]+\s*(\w{3} \d{4}|Present|present)', l)
-                if date_m:
-                    date_str = date_m.group(0)
-                    rest = l.replace(date_str, "").strip()
-                    # next line might be location/title
-                    latex += f"  \\resumeSubheading{{{tex(rest)}}}{{{tex(date_str)}}}{{}}{{}}\n"
+                if dm:
+                    rest = l.replace(dm.group(0),"").strip(" –-")
+                    add(f"  \\resumeSubheading{{{tex(rest)}}}{{{tex(dm.group(0))}}}{{}}{{}}")
+                elif any(x in l for x in ["Intern","Engineer","Developer","Analyst","Scientist","Manager"]):
+                    add(f"  \\resumeSubheading{{{tex(l)}}}{{}}{{}}{{}}")
                 else:
-                    latex += f"  \\resumeSubheading{{{tex(l)}}}{{}}{{}}{{}}\n"
+                    add(f"  \\resumeSubheading{{{tex(l)}}}{{}}{{}}{{}}")
         if in_items:
-            latex += "  \\resumeItemListEnd\n"
-        latex += "\\resumeSubHeadingListEnd\n\n"
+            add(r"  \resumeItemListEnd")
+        add(r"\resumeSubHeadingListEnd")
 
     # Projects
     proj_key = next((k for k in sections if "PROJECT" in k), None)
     if proj_key:
-        latex += "\\section{Projects}\n\\resumeSubHeadingListStart\n"
+        add(r"\section{Projects}", r"\resumeSubHeadingListStart")
         in_items = False
         for l in sections[proj_key]:
             if not l: continue
             if l.startswith(("*","•","-","·")):
                 if not in_items:
-                    latex += "  \\resumeItemListStart\n"
+                    add(r"  \resumeItemListStart")
                     in_items = True
-                latex += f"    \\resumeItem{{{tex(l.lstrip('*•-· ').strip())}}}\n"
+                add(f"    \\resumeItem{{{tex(l.lstrip('*•-· '))}}}")
             else:
                 if in_items:
-                    latex += "  \\resumeItemListEnd\n"
+                    add(r"  \resumeItemListEnd")
                     in_items = False
-                latex += f"  \\resumeProjectHeading{{\\textbf{{{tex(l)}}}}}{{}}\n"
+                add(f"  \\resumeProjectHeading{{\\textbf{{{tex(l)}}}}}{{}}")
         if in_items:
-            latex += "  \\resumeItemListEnd\n"
-        latex += "\\resumeSubHeadingListEnd\n\n"
+            add(r"  \resumeItemListEnd")
+        add(r"\resumeSubHeadingListEnd")
 
     # Skills
-    if aligned_skills:
-        latex += "\\section{Technical Skills}\n\\resumeSubHeadingListStart\n"
-        latex += f"  \\item \\small{{\\textbf{{Aligned Skills}}: {tex(aligned_skills)}}}\n"
-        latex += "\\resumeSubHeadingListEnd\n\n"
+    if skills:
+        add(r"\section{Technical Skills}", r"\resumeSubHeadingListStart")
+        add(f"  \\item \\small{{\\textbf{{Aligned Skills}}: {tex(skills)}}}")
+        add(r"\resumeSubHeadingListEnd")
 
-    latex += "\\end{document}\n"
+    add(r"\end{document}")
 
-    # Return LaTeX source
+    latex = "\n".join(L)
+
+    # Return LaTeX
     if fmt == "latex":
         from flask import make_response
         resp = make_response(latex)
-        resp.headers["Content-Type"] = "text/plain"
+        resp.headers["Content-Type"] = "text/plain; charset=utf-8"
         resp.headers["Content-Disposition"] = "attachment; filename=resume_tailored.tex"
         return resp
 
@@ -719,31 +704,30 @@ def generate_resume_pdf():
             tex_path = os.path.join(tmpdir, "resume.tex")
             with open(tex_path, "w", encoding="utf-8") as f:
                 f.write(latex)
-            result = subprocess.run(
+            subprocess.run(
                 ["pdflatex", "-interaction=nonstopmode", "-output-directory", tmpdir, tex_path],
-                capture_output=True, text=True, timeout=30
+                capture_output=True, timeout=30
             )
             pdf_path = os.path.join(tmpdir, "resume.pdf")
             if os.path.exists(pdf_path):
                 with open(pdf_path, "rb") as f:
                     pdf_bytes = f.read()
                 from flask import make_response
-                safe_name = f"Resume_{job_title.replace(' ','-')}_Tailored.pdf"
                 resp = make_response(pdf_bytes)
                 resp.headers["Content-Type"] = "application/pdf"
-                resp.headers["Content-Disposition"] = f"attachment; filename={safe_name}"
+                resp.headers["Content-Disposition"] = f"attachment; filename=Resume_{job_title.replace(' ','-')}_Tailored.pdf"
                 return resp
             else:
-                # pdflatex failed — return LaTeX source as fallback
+                # fallback to latex
                 from flask import make_response
                 resp = make_response(latex)
-                resp.headers["Content-Type"] = "text/plain"
+                resp.headers["Content-Type"] = "text/plain; charset=utf-8"
                 resp.headers["Content-Disposition"] = "attachment; filename=resume_tailored.tex"
                 return resp
     except Exception as e:
         from flask import make_response
         resp = make_response(latex)
-        resp.headers["Content-Type"] = "text/plain"
+        resp.headers["Content-Type"] = "text/plain; charset=utf-8"
         resp.headers["Content-Disposition"] = "attachment; filename=resume_tailored.tex"
         return resp
 
